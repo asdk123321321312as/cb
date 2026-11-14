@@ -1,6 +1,13 @@
+--!nocheck
+--[[
+    SleepScript • Counter Blox (Rolve)
+    ---------------------------------------------------------------
+    ESP на Drawing с полной кастомизацией, бхоп, фиксация FOV,
+    автобаннихоп со строгим детектом.
+--]]
 
 local CONFIG = {
-    ScriptURL   = "",                                  -- RAW-ссылка на файл (для переинжекта после хопа)
+    ScriptURL   = "",
     Accent      = Color3.fromRGB(122, 92, 255),
     AccentDark  = Color3.fromRGB(64, 46, 150),
     Keybind     = Enum.KeyCode.RightShift,
@@ -29,42 +36,49 @@ if not Drawing then
     return warn("[SleepScript] нет Drawing API — ESP не запустится.")
 end
 
-local camera = Workspace.CurrentCamera
-local fovOriginal = camera and camera.FieldOfView or 70
-Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
-    if Workspace.CurrentCamera then
-        camera = Workspace.CurrentCamera
-        fovOriginal = camera.FieldOfView
-    end
-end)
-
 --==============================================================
 --  СОСТОЯНИЕ
 --==============================================================
 local S = {
-    paranoid      = false,
-    adaptive      = true,
-    espEnabled    = false,
-    box           = true,
-    name          = true,
-    health        = true,
-    distance      = true,
-    tracer        = false,
-    skeleton      = false,
-    teamCheck     = true,
-    showLocal     = false,
-    fovCircle     = false,
-    fovRadius     = 240,
-    aimFov        = true,
-    maxDist       = 600,
-    fovEnabled    = false,
-    fovValue      = 90,
-    fovSmooth     = true,
-    watchEnabled  = true,
-    autoRejoin    = true,
-    rejoinDelay   = 1.5,
-    banCount      = 0,
-    lastReason    = "—",
+    paranoid     = false,
+    adaptive     = true,
+    espEnabled   = false,
+
+    style        = "full",        -- full | corner | cross | dot
+    thickness    = 1,
+    cornerSize   = 9,
+    fill         = false,
+    fillAlpha    = 0.85,
+    textSize     = 13,
+    nameMode     = "name",        -- name | display | both | off
+    showDist     = true,
+    distUnit     = "m",           -- m | studs
+    hpMode       = "bar",         -- bar | text | off
+    hpSide       = "left",        -- left | right
+    skeleton     = false,
+    tracer       = false,
+    offscreen    = false,
+
+    colorMode    = "static",      -- static | team | health | distance
+    colorStatic  = Color3.fromRGB(235, 235, 245),
+    colorHidden  = Color3.fromRGB(150, 150, 165),
+    colorTracer  = Color3.fromRGB(122, 92, 255),
+
+    teamCheck    = true,
+    showLocal    = false,
+    maxDist      = 600,
+
+    bhop         = false,
+    jumpLimit    = 0,             -- -1 = бесконечно, 0 = бхоп, N = N прыжков
+
+    fovEnabled   = false,
+    fovValue     = 90,
+
+    watchEnabled = true,
+    autoRejoin   = true,
+    rejoinDelay  = 1.5,
+    banCount     = 0,
+    lastReason   = "—",
 }
 
 local connections = {}
@@ -87,6 +101,46 @@ local function logFile(line)
 end
 
 --==============================================================
+--  КАМЕРА И ФИКСАЦИЯ FOV
+--==============================================================
+local camera = Workspace.CurrentCamera
+local fovOriginal = camera and camera.FieldOfView or 70
+local fovWriting = false
+
+local function applyFov()
+    local cam = camera or Workspace.CurrentCamera
+    if not cam then return end
+    local target = S.fovEnabled and S.fovValue or fovOriginal
+    if math.abs(cam.FieldOfView - target) > 0.2 then
+        fovWriting = true
+        pcall(function() cam.FieldOfView = target end)
+        fovWriting = false
+    end
+end
+
+local function bindCam(cam)
+    if not cam then return end
+    track(cam:GetPropertyChangedSignal("FieldOfView"):Connect(function()
+        if fovWriting then return end
+        local target = S.fovEnabled and S.fovValue or fovOriginal
+        if math.abs(cam.FieldOfView - target) > 0.2 then
+            fovWriting = true
+            pcall(function() cam.FieldOfView = target end)
+            fovWriting = false
+        end
+    end))
+end
+
+bindCam(camera)
+track(Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+    if Workspace.CurrentCamera then
+        camera = Workspace.CurrentCamera
+        bindCam(camera)
+        applyFov()
+    end
+end))
+
+--==============================================================
 --  UI
 --==============================================================
 local function new(class, props, parent)
@@ -105,8 +159,8 @@ local gui = new("ScreenGui", {
 }, gethui())
 
 local main = new("Frame", {
-    Size = UDim2.fromOffset(486, 348),
-    Position = UDim2.new(0.5, -243, 0.5, -174),
+    Size = UDim2.fromOffset(486, 360),
+    Position = UDim2.new(0.5, -243, 0.5, -180),
     BackgroundColor3 = Color3.fromRGB(13, 15, 20),
     BorderSizePixel = 0,
     ClipsDescendants = true,
@@ -145,13 +199,13 @@ new("TextLabel", {
 }, header)
 
 new("TextLabel", {
-    Text = "counter blox  •  drawing-only esp  •  rac watch  •  fov",
+    Text = "counter blox  •  custom esp  •  bhop  •  fov  •  rac watch",
     Font = Enum.Font.Gotham,
     TextSize = 11,
     TextColor3 = Color3.fromRGB(150, 150, 175),
     BackgroundTransparency = 1,
     Position = UDim2.fromOffset(17, 31),
-    Size = UDim2.fromOffset(320, 14),
+    Size = UDim2.fromOffset(340, 14),
     TextXAlignment = Enum.TextXAlignment.Left,
 }, header)
 
@@ -386,8 +440,47 @@ local function button(parent, text, cb)
     return b
 end
 
+local function chips(parent, items, current, cb)
+    local grid = new("Frame", {
+        Size = UDim2.new(1, 0, 0, math.ceil(#items / 4) * 26),
+        BackgroundTransparency = 1,
+    }, parent)
+    new("UIGridLayout", {
+        CellSize = UDim2.new(0.25, -3, 0, 22),
+        CellPadding = UDim2.new(0, 3, 0, 4),
+        SortOrder = Enum.SortOrder.LayoutOrder,
+    }, grid)
+    local made = {}
+    local function paint()
+        for value, b in pairs(made) do
+            b.BackgroundColor3 = (value == current) and CONFIG.AccentDark or Color3.fromRGB(32, 32, 44)
+        end
+    end
+    for i, item in ipairs(items) do
+        local b = new("TextButton", {
+            Text = item.name,
+            Font = Enum.Font.GothamMedium,
+            TextSize = 11,
+            TextColor3 = item.color or Color3.fromRGB(215, 215, 228),
+            BackgroundColor3 = Color3.fromRGB(32, 32, 44),
+            BorderSizePixel = 0,
+            AutoButtonColor = false,
+            LayoutOrder = i,
+        }, grid)
+        new("UICorner", { CornerRadius = UDim.new(0, 6) }, b)
+        made[item.value] = b
+        b.MouseButton1Click:Connect(function()
+            current = item.value
+            paint()
+            cb(item.value)
+        end)
+    end
+    paint()
+    return grid
+end
+
 --==============================================================
---  ESP + FOV
+--  ESP
 --==============================================================
 local ESP = { objects = {} }
 local FONT = (Drawing.Fonts and Drawing.Fonts.UI) or 2
@@ -402,21 +495,26 @@ end
 
 local function blankRec()
     local rec = {
-        box = sq(false), boxFill = sq(true),
+        box = sq(false),
+        fill = sq(true),
         hpBg = sq(true), hp = sq(true),
-        marker = sq(false),
-        name = Drawing.new("Text"), dist = Drawing.new("Text"),
+        name = Drawing.new("Text"), dist = Drawing.new("Text"), hpText = Drawing.new("Text"),
         tracer = Drawing.new("Line"),
-        bones = {},
+        off = Drawing.new("Circle"),
+        corners = {}, cross = {}, bones = {},
     }
     rec.name.Center = true; rec.name.Outline = true; rec.name.Font = FONT
-    rec.name.Size = 13; rec.name.OutlineColor = Color3.fromRGB(0, 0, 0)
+    rec.name.OutlineColor = Color3.fromRGB(0, 0, 0)
     rec.dist.Center = true; rec.dist.Outline = true; rec.dist.Font = FONT
-    rec.dist.Size = 12; rec.dist.OutlineColor = Color3.fromRGB(0, 0, 0)
+    rec.dist.OutlineColor = Color3.fromRGB(0, 0, 0)
+    rec.hpText.Center = true; rec.hpText.Outline = true; rec.hpText.Font = FONT
+    rec.hpText.OutlineColor = Color3.fromRGB(0, 0, 0)
     rec.tracer.Thickness = 1
-    rec.boxFill.Transparency = 0.9
-    rec.marker.Thickness = 2
-    rec.marker.Color = CONFIG.Accent
+    rec.fill.Transparency = 0.85
+    rec.off.Thickness = 2
+    rec.off.Filled = false
+    for i = 1, 8 do rec.corners[i] = sq(false) end
+    for i = 1, 4 do rec.cross[i] = sq(false) end
     for i = 1, 15 do
         local l = Drawing.new("Line")
         l.Thickness = 1
@@ -428,7 +526,7 @@ end
 
 local function hide(rec)
     for k, o in pairs(rec) do
-        if k == "bones" then
+        if k == "bones" or k == "corners" or k == "cross" then
             for _, b in ipairs(o) do b.Visible = false end
         else
             pcall(function() o.Visible = false end)
@@ -449,17 +547,6 @@ local BONES = {
         { "Torso", "Left Leg" }, { "Torso", "Right Leg" },
     },
 }
-
-local fovCircle = Drawing.new("Circle")
-fovCircle.Thickness = 1
-fovCircle.Filled = false
-fovCircle.Color = CONFIG.Accent
-fovCircle.Transparency = 0.55
-fovCircle.Visible = false
-
-local targetMarker = sq(false)
-targetMarker.Thickness = 2
-targetMarker.Color = CONFIG.Accent
 
 local function bindPlayer(player)
     if ESP.objects[player] then return end
@@ -502,43 +589,63 @@ rayParams.IgnoreWater = true
 
 local visState, visClock = {}, {}
 local lastInterval, fpsSmooth = 0.016, 60
-local fovRestoring = false
 
-local function accentColor(player, visible)
-    if player.Team and player.Team == lp.Team then
-        return Color3.fromRGB(120, 210, 255)
+local function colorFor(player, visible, frac, dist)
+    if not visible then return S.colorHidden end
+    local mode = S.colorMode
+    if mode == "team" then
+        if player.Team then return player.TeamColor.Color end
+        return S.colorStatic
+    elseif mode == "health" then
+        return Color3.fromRGB(230, 70, 70):Lerp(Color3.fromRGB(90, 220, 120), frac)
+    elseif mode == "distance" then
+        return Color3.fromRGB(90, 220, 120):Lerp(Color3.fromRGB(230, 70, 70), math.clamp(dist / S.maxDist, 0, 1))
     end
-    return visible and Color3.fromRGB(235, 235, 245) or Color3.fromRGB(150, 150, 165)
+    return S.colorStatic
+end
+
+local function put(s, x, y, w, h, col)
+    s.Color = col
+    s.Thickness = S.thickness
+    s.Position = Vector2.new(x, y)
+    s.Size = Vector2.new(w, h)
+    s.Visible = true
+end
+
+local function drawBox(rec, x, y, w, h, col)
+    local t = S.thickness
+    if S.style == "full" then
+        put(rec.box, x, y, w, h, col)
+        return
+    end
+    if S.style == "corner" then
+        local c = math.clamp(S.cornerSize, 3, math.min(w / 2, h / 2))
+        put(rec.corners[1], x, y, c, t, col)
+        put(rec.corners[2], x, y, t, c, col)
+        put(rec.corners[3], x + w - c, y, c, t, col)
+        put(rec.corners[4], x + w - t, y, t, c, col)
+        put(rec.corners[5], x, y + h - t, c, t, col)
+        put(rec.corners[6], x, y + h - c, t, c, col)
+        put(rec.corners[7], x + w - c, y + h - t, c, t, col)
+        put(rec.corners[8], x + w - t, y + h - c, t, c, col)
+        return
+    end
+    local cx, cy = x + w / 2, y + h / 2
+    local c = math.clamp(S.cornerSize, 4, 20)
+    if S.style == "cross" then
+        put(rec.cross[1], cx - c / 2, cy - t / 2, c, t, col)
+        put(rec.cross[2], cx - t / 2, cy - c / 2, t, c, col)
+        put(rec.cross[3], cx - c / 2, cy - t / 2, c, t, col)
+        put(rec.cross[4], cx - t / 2, cy - c / 2, t, c, col)
+        return
+    end
+    rec.box.Filled = true
+    put(rec.box, cx - 3, cy - 3, 6, 6, col)
+    rec.box.Filled = false
 end
 
 local function frameUpdate(dt)
-    -- === FOV камеры ===
-    if camera then
-        if S.fovEnabled then
-            fovRestoring = true
-            if S.fovSmooth then
-                local cur = camera.FieldOfView
-                camera.FieldOfView = cur + (S.fovValue - cur) * math.min(dt * 10, 1)
-            else
-                camera.FieldOfView = S.fovValue
-            end
-        elseif fovRestoring then
-            local cur = camera.FieldOfView
-            local nxt = cur + (fovOriginal - cur) * math.min(dt * 10, 1)
-            if math.abs(nxt - fovOriginal) < 0.15 then
-                camera.FieldOfView = fovOriginal
-                fovRestoring = false
-            else
-                camera.FieldOfView = nxt
-            end
-        end
-    end
-
-    if not S.espEnabled or not camera then
-        fovCircle.Visible = false
-        targetMarker.Visible = false
-        return
-    end
+    if not S.espEnabled or not camera then return end
 
     fpsSmooth = fpsSmooth * 0.9 + (1 / math.max(dt, 0.001)) * 0.1
     local base = 0.016
@@ -554,16 +661,6 @@ local function frameUpdate(dt)
     local vp = camera.ViewportSize
     local cx, cy = vp.X / 2, vp.Y / 2
 
-    if S.fovCircle then
-        fovCircle.Position = Vector2.new(cx, cy)
-        fovCircle.Radius = S.fovRadius
-        fovCircle.Visible = true
-    else
-        fovCircle.Visible = false
-    end
-
-    local bestPos, bestSize, bestD = nil, nil, S.fovRadius
-
     for player, entry in pairs(ESP.objects) do
         local rec = entry.rec
         local head, root, hum = entry.head, entry.root, entry.humanoid
@@ -576,8 +673,9 @@ local function frameUpdate(dt)
             if dist <= S.maxDist and not (S.teamCheck and player.Team == lp.Team and player ~= lp) then
                 local sTop, onTop = camera:WorldToViewportPoint(headPos + Vector3.new(0, 1.1, 0))
                 local sBot, onBot = camera:WorldToViewportPoint(root.Position - Vector3.new(0, 2.5, 0))
+                local onScreen = onTop and onBot and sTop.Z > 0 and sBot.Z > 0 and sBot.Y > sTop.Y
 
-                if onTop and onBot and sTop.Z > 0 and sBot.Z > 0 and sBot.Y > sTop.Y then
+                if onScreen then
                     local h = sBot.Y - sTop.Y
                     local w = h * 0.45
                     local x = sTop.X - w / 2
@@ -589,48 +687,70 @@ local function frameUpdate(dt)
                         local hit = Workspace:Raycast(camPos, headPos - camPos, rayParams)
                         visState[player] = (hit == nil or (entry.char and hit.Instance:IsDescendantOf(entry.char)))
                     end
-                    local col = accentColor(player, visState[player] ~= false)
+                    local frac = math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
+                    local col = colorFor(player, visState[player] ~= false, frac, dist)
 
-                    if S.box then
-                        rec.box.Color = col
-                        rec.box.Position = Vector2.new(x, y)
-                        rec.box.Size = Vector2.new(w, h)
-                        rec.box.Visible = true
-                        rec.boxFill.Color = col
-                        rec.boxFill.Position = Vector2.new(x, y)
-                        rec.boxFill.Size = Vector2.new(w, h)
-                        rec.boxFill.Visible = true
+                    drawBox(rec, x, y, w, h, col)
+
+                    if S.fill and S.style == "full" then
+                        rec.fill.Color = col
+                        rec.fill.Transparency = S.fillAlpha
+                        rec.fill.Position = Vector2.new(x, y)
+                        rec.fill.Size = Vector2.new(w, h)
+                        rec.fill.Visible = true
                     else
-                        rec.box.Visible = false; rec.boxFill.Visible = false
+                        rec.fill.Visible = false
                     end
 
-                    if S.health then
-                        local frac = math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
-                        rec.hpBg.Position = Vector2.new(x - 6, y)
+                    if S.hpMode == "bar" then
+                        local hx = (S.hpSide == "left") and (x - 6) or (x + w + 3)
+                        rec.hpBg.Position = Vector2.new(hx, y)
                         rec.hpBg.Size = Vector2.new(3, h)
                         rec.hpBg.Color = Color3.fromRGB(25, 25, 32)
                         rec.hpBg.Visible = true
-                        rec.hp.Position = Vector2.new(x - 6, y + h * (1 - frac))
+                        rec.hp.Position = Vector2.new(hx, y + h * (1 - frac))
                         rec.hp.Size = Vector2.new(3, h * frac)
                         rec.hp.Color = Color3.fromRGB(90, 220, 120):Lerp(Color3.fromRGB(230, 70, 70), 1 - frac)
                         rec.hp.Visible = true
+                        rec.hpText.Visible = false
+                    elseif S.hpMode == "text" then
+                        rec.hpBg.Visible = false; rec.hp.Visible = false
+                        rec.hpText.Text = tostring(math.floor(hum.Health))
+                        rec.hpText.Size = S.textSize
+                        rec.hpText.Color = Color3.fromRGB(90, 220, 120):Lerp(Color3.fromRGB(230, 70, 70), 1 - frac)
+                        rec.hpText.Position = Vector2.new(x + w / 2, y + h + 3)
+                        rec.hpText.Visible = true
                     else
-                        rec.hp.Visible = false; rec.hpBg.Visible = false
+                        rec.hpBg.Visible = false; rec.hp.Visible = false; rec.hpText.Visible = false
                     end
 
-                    if S.name then
-                        rec.name.Text = player.Name
+                    local label
+                    if S.nameMode == "name" then
+                        label = player.Name
+                    elseif S.nameMode == "display" then
+                        label = player.DisplayName
+                    elseif S.nameMode == "both" then
+                        label = player.DisplayName .. " (" .. player.Name .. ")"
+                    end
+                    if label then
+                        rec.name.Text = label
+                        rec.name.Size = S.textSize
                         rec.name.Color = col
-                        rec.name.Position = Vector2.new(x + w / 2, y - 16)
+                        rec.name.Position = Vector2.new(x + w / 2, y - S.textSize - 3)
                         rec.name.Visible = true
                     else
                         rec.name.Visible = false
                     end
 
-                    if S.distance then
-                        rec.dist.Text = string.format("%d m", math.floor(dist / 3.5))
+                    if S.showDist then
+                        if S.distUnit == "m" then
+                            rec.dist.Text = string.format("%d m", math.floor(dist / 3.5))
+                        else
+                            rec.dist.Text = string.format("%d st", math.floor(dist))
+                        end
+                        rec.dist.Size = S.textSize - 1
                         rec.dist.Color = col
-                        rec.dist.Position = Vector2.new(x + w / 2, y + h + 2)
+                        rec.dist.Position = Vector2.new(x + w / 2, y + h + (S.hpMode == "text" and 17 or 3))
                         rec.dist.Visible = true
                     else
                         rec.dist.Visible = false
@@ -639,7 +759,8 @@ local function frameUpdate(dt)
                     if S.tracer then
                         rec.tracer.From = Vector2.new(cx, vp.Y)
                         rec.tracer.To = Vector2.new(x + w / 2, y + h)
-                        rec.tracer.Color = col
+                        rec.tracer.Color = S.colorTracer
+                        rec.tracer.Thickness = S.thickness
                         rec.tracer.Visible = true
                     else
                         rec.tracer.Visible = false
@@ -658,6 +779,7 @@ local function frameUpdate(dt)
                                     line.From = Vector2.new(pa.X, pa.Y)
                                     line.To = Vector2.new(pb.X, pb.Y)
                                     line.Color = col
+                                    line.Thickness = S.thickness
                                     line.Visible = true
                                 elseif line then
                                     line.Visible = false
@@ -668,15 +790,17 @@ local function frameUpdate(dt)
                         for _, l in ipairs(rec.bones) do l.Visible = false end
                     end
 
-                    if S.aimFov then
-                        local px, py = x + w / 2, y + h / 2
-                        local d = math.sqrt((px - cx) ^ 2 + (py - cy) ^ 2)
-                        if d < bestD then
-                            bestD, bestPos, bestSize = d, Vector2.new(px, py), Vector2.new(w, h)
-                        end
-                    end
+                    rec.off.Visible = false
                 else
                     hide(rec)
+                    if S.offscreen and sTop.Z > 0 then
+                        local ox = math.clamp(sTop.X, 30, vp.X - 30)
+                        local oy = math.clamp(sTop.Y, 30, vp.Y - 30)
+                        rec.off.Position = Vector2.new(ox, oy)
+                        rec.off.Radius = 7
+                        rec.off.Color = S.colorStatic
+                        rec.off.Visible = true
+                    end
                 end
             else
                 hide(rec)
@@ -685,14 +809,6 @@ local function frameUpdate(dt)
             hide(rec)
         end
     end
-
-    if bestPos then
-        targetMarker.Position = bestPos - bestSize / 2 - Vector2.new(3, 3)
-        targetMarker.Size = bestSize + Vector2.new(6, 6)
-        targetMarker.Visible = true
-    else
-        targetMarker.Visible = false
-    end
 end
 
 local espAccum = 0
@@ -700,10 +816,66 @@ track(RunService.RenderStepped:Connect(function(dt)
     espAccum += dt
     if espAccum < lastInterval then return end
     espAccum = 0
-    if S.espEnabled or S.fovEnabled or fovRestoring then
-        pcall(frameUpdate, dt)
+    pcall(frameUpdate, dt)
+end))
+
+--==============================================================
+--  БХОП
+--==============================================================
+local lastJump = 0
+local airJumps = 0
+
+local function holdingJump()
+    return UIS:IsKeyDown(Enum.KeyCode.Space) or UIS:IsKeyDown(Enum.KeyCode.ButtonA)
+end
+
+local function doJump(auto)
+    if not S.bhop then return end
+    local now = os.clock()
+    if now - lastJump < 0.04 then return end
+    if auto and now - lastJump < 0.12 then return end
+
+    local char = lp.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return end
+    local root = hum.RootPart
+    if not root or root.Anchored then return end
+
+    local grounded = hum.FloorMaterial ~= Enum.Material.Air
+    if grounded then
+        airJumps = 0
+    else
+        if S.jumpLimit >= 0 and airJumps >= S.jumpLimit then return end
+        airJumps += 1
+    end
+    lastJump = now
+
+    pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+
+    local jp = hum.JumpPower
+    if not hum.UseJumpPower then
+        jp = math.sqrt(2 * Workspace.Gravity * hum.JumpHeight)
+    end
+    if jp and jp > 0 then
+        local v = root.AssemblyLinearVelocity
+        if v.Y < jp * 0.95 then
+            root.AssemblyLinearVelocity = Vector3.new(v.X, jp, v.Z)
+        end
+    end
+end
+
+track(UIS.JumpRequest:Connect(function() pcall(doJump, false) end))
+track(RunService.Stepped:Connect(function()
+    if not S.bhop then return end
+    local char = lp.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    if hum.FloorMaterial ~= Enum.Material.Air then
+        airJumps = 0
+        if holdingJump() then pcall(doJump, true) end
     end
 end))
+track(lp.CharacterAdded:Connect(function() airJumps = 0 end))
 
 --==============================================================
 --  АВТОБАННИХОП
@@ -857,33 +1029,98 @@ end))
 --  СТРАНИЦЫ
 --==============================================================
 local visualPage = page("visual"); tabButton("Визуал", "visual")
+local movePage   = page("move");   tabButton("Движение", "move")
 local watchPage  = page("watch");  tabButton("Автобан", "watch")
 local miscPage   = page("misc");   tabButton("Прочее", "misc")
 
-section(visualPage, "esp")
+section(visualPage, "основа")
 toggle(visualPage, "Включить ESP", false, function(v) S.espEnabled = v end)
-toggle(visualPage, "Боксы", true, function(v) S.box = v end)
-toggle(visualPage, "Ник", true, function(v) S.name = v end)
-toggle(visualPage, "Полоска HP", true, function(v) S.health = v end)
-toggle(visualPage, "Дистанция", true, function(v) S.distance = v end)
-toggle(visualPage, "Трассеры", false, function(v) S.tracer = v end)
-toggle(visualPage, "Скелет", false, function(v) S.skeleton = v end)
-
-section(visualPage, "fov")
-toggle(visualPage, "Изменить FOV камеры", false, function(v)
-    if v then fovOriginal = camera and camera.FieldOfView or 70 end
-    S.fovEnabled = v
-end)
-slider(visualPage, "Значение FOV", 70, 120, 90, function(v) S.fovValue = v end)
-toggle(visualPage, "Плавный переход", true, function(v) S.fovSmooth = v end)
-toggle(visualPage, "Круг FOV", false, function(v) S.fovCircle = v end)
-slider(visualPage, "Радиус FOV", 60, 500, 240, function(v) S.fovRadius = v end)
-toggle(visualPage, "Метка цели в FOV", true, function(v) S.aimFov = v end)
-
-section(visualPage, "фильтры")
 toggle(visualPage, "Игнорировать союзников", true, function(v) S.teamCheck = v end)
 toggle(visualPage, "Показывать себя", false, function(v) S.showLocal = v end)
 slider(visualPage, "Макс. дистанция (студы)", 100, 2000, 600, function(v) S.maxDist = v end)
+
+section(visualPage, "форма")
+chips(visualPage, {
+    { name = "Бокс", value = "full" },
+    { name = "Уголки", value = "corner" },
+    { name = "Крест", value = "cross" },
+    { name = "Точка", value = "dot" },
+}, S.style, function(v) S.style = v end)
+slider(visualPage, "Толщина линий", 1, 4, 1, function(v) S.thickness = v end)
+slider(visualPage, "Размер уголков", 4, 24, 9, function(v) S.cornerSize = v end)
+toggle(visualPage, "Заливка бокса", false, function(v) S.fill = v end)
+slider(visualPage, "Прозрачность заливки", 20, 95, 85, function(v) S.fillAlpha = v / 100 end)
+
+section(visualPage, "текст")
+slider(visualPage, "Размер текста", 9, 22, 13, function(v) S.textSize = v end)
+chips(visualPage, {
+    { name = "Ник", value = "name" },
+    { name = "Display", value = "display" },
+    { name = "Оба", value = "both" },
+    { name = "Нет", value = "off" },
+}, S.nameMode, function(v) S.nameMode = v end)
+toggle(visualPage, "Дистанция", true, function(v) S.showDist = v end)
+chips(visualPage, {
+    { name = "Метры", value = "m" },
+    { name = "Студы", value = "studs" },
+}, S.distUnit, function(v) S.distUnit = v end)
+
+section(visualPage, "здоровье")
+chips(visualPage, {
+    { name = "Полоска", value = "bar" },
+    { name = "Цифры", value = "text" },
+    { name = "Нет", value = "off" },
+}, S.hpMode, function(v) S.hpMode = v end)
+chips(visualPage, {
+    { name = "Слева", value = "left" },
+    { name = "Справа", value = "right" },
+}, S.hpSide, function(v) S.hpSide = v end)
+
+section(visualPage, "доп")
+toggle(visualPage, "Скелет", false, function(v) S.skeleton = v end)
+toggle(visualPage, "Трассеры", false, function(v) S.tracer = v end)
+toggle(visualPage, "Метки за экраном", false, function(v) S.offscreen = v end)
+
+section(visualPage, "цвет")
+chips(visualPage, {
+    { name = "Свой", value = "static" },
+    { name = "Команда", value = "team" },
+    { name = "По HP", value = "health" },
+    { name = "Дистанция", value = "distance" },
+}, S.colorMode, function(v) S.colorMode = v end)
+
+local PALETTE = {
+    { name = "Белый", c = Color3.fromRGB(235, 235, 245) },
+    { name = "Фиолет", c = Color3.fromRGB(150, 120, 255) },
+    { name = "Циан", c = Color3.fromRGB(80, 225, 255) },
+    { name = "Лайм", c = Color3.fromRGB(160, 255, 90) },
+    { name = "Красный", c = Color3.fromRGB(255, 80, 80) },
+    { name = "Оранж", c = Color3.fromRGB(255, 150, 60) },
+    { name = "Розовый", c = Color3.fromRGB(255, 110, 210) },
+    { name = "Синий", c = Color3.fromRGB(90, 140, 255) },
+}
+local palItems = {}
+for _, p in ipairs(PALETTE) do table.insert(palItems, { name = p.name, value = p.c, color = p.c }) end
+
+section(visualPage, "свой цвет")
+chips(visualPage, palItems, S.colorStatic, function(v) S.colorStatic = v end)
+section(visualPage, "цвет невидимых")
+chips(visualPage, palItems, S.colorHidden, function(v) S.colorHidden = v end)
+
+section(movePage, "бхоп")
+toggle(movePage, "Бхоп (держать пробел)", false, function(v) S.bhop = v; airJumps = 0 end)
+slider(movePage, "Прыжков в воздухе", -1, 10, 0, function(v) S.jumpLimit = v; airJumps = 0 end)
+
+section(movePage, "камера")
+toggle(movePage, "Фиксация FOV", false, function(v)
+    if v then fovOriginal = (camera and camera.FieldOfView) or 70 end
+    S.fovEnabled = v
+    applyFov()
+end)
+slider(movePage, "FOV", 40, 120, 90, function(v)
+    S.fovValue = v
+    applyFov()
+end)
 
 section(watchPage, "наблюдение")
 toggle(watchPage, "Следить за RAC", true, function(v) S.watchEnabled = v end)
@@ -913,8 +1150,9 @@ toggle(miscPage, "Адаптивный бюджет", true, function(v) S.adapti
 section(miscPage, "безопасность")
 button(miscPage, "PANIC — выключить всё", function()
     S.espEnabled = false
-    S.fovCircle = false
+    S.bhop = false
     S.fovEnabled = false
+    applyFov()
     notify("Всё выключено")
 end)
 button(miscPage, "Выгрузить скрипт", function()
@@ -926,6 +1164,7 @@ end)
 --==============================================================
 track(RunService.Heartbeat:Connect(function()
     statusLabel.Text = string.format("Детектов: %d\nПоследнее: %s", S.banCount, S.lastReason)
+    if S.fovEnabled then pcall(applyFov) end
 end))
 
 track(UIS.InputBegan:Connect(function(input, processed)
@@ -933,9 +1172,9 @@ track(UIS.InputBegan:Connect(function(input, processed)
     if input.KeyCode == CONFIG.Keybind then main.Visible = not main.Visible end
 end))
 
-main.Position = UDim2.new(0.5, -243, 0.5, -164)
+main.Position = UDim2.new(0.5, -243, 0.5, -170)
 TweenService:Create(main, TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
-    Position = UDim2.new(0.5, -243, 0.5, -174),
+    Position = UDim2.new(0.5, -243, 0.5, -180),
 }):Play()
 
 pages.visual.Visible = true
@@ -948,8 +1187,6 @@ tabs.visual.BackgroundColor3 = CONFIG.AccentDark
 local function unload()
     for _, c in ipairs(connections) do pcall(function() c:Disconnect() end) end
     for player in pairs(ESP.objects) do unbindPlayer(player) end
-    pcall(function() fovCircle:Remove() end)
-    pcall(function() targetMarker:Remove() end)
     if camera then pcall(function() camera.FieldOfView = fovOriginal end) end
     pcall(function() gui:Destroy() end)
     getgenv().SleepScript = nil
