@@ -1,31 +1,11 @@
---!nocheck
---[[
-    SleepScript • Counter Blox (Rolve)
-    ---------------------------------------------------------------
-    Почему ESP не триггерит RAC:
-      • Рисуем ТОЛЬКО через Drawing (клиентский слой, 0 инстансов
-        в workspace, 0 репликации, 0 трафика по ремоутам).
-      • Никаких Highlight / BillboardGui / Folder в игре — RAC
-        нечего сравнивать со снапшотом сервера.
-      • Адаптивный бюджет кадра + джиттер интервалов, чтобы паттерн
-        чтений не выглядел машинным.
-      • Кэш ссылок на персонажа, рейкаст видимости раз в ~0.15с
-        со смещением по игрокам, тексты обновляются реже боксов.
-      • cloneref на сервисы, один ключ в getgenv, без хуков метаметодов.
-      • Panic-режим: мгновенно гасит всё, если почуял неладное.
-
-    Автобаннихоп:
-      • Ловит GUI/чат-сообщения RAC, кик, AncestryChanged.
-      • Пишет лог, при детекте — queue_on_teleport + хоп на случайный
-        сервер ДО фактического кика.
-      • После N банов подряд включается паранойя автоматически.
---]]
 
 local CONFIG = {
-    ScriptURL   = "",                                  -- RAW-ссылка на этот файл (нужна для автопереинжекта)
+    ScriptURL   = "",                                  -- RAW-ссылка на файл (для переинжекта после хопа)
     Accent      = Color3.fromRGB(122, 92, 255),
     AccentDark  = Color3.fromRGB(64, 46, 150),
     Keybind     = Enum.KeyCode.RightShift,
+    DetectGrace = 20,
+    LogOnly     = false,
 }
 
 if getgenv().SleepScript then pcall(function() getgenv().SleepScript.Unload() end) end
@@ -46,12 +26,16 @@ local Workspace         = cloneref(workspace)
 local lp                = Players.LocalPlayer
 
 if not Drawing then
-    return warn("[SleepScript] Исполнитель без Drawing API — ESP не запустится.")
+    return warn("[SleepScript] нет Drawing API — ESP не запустится.")
 end
 
 local camera = Workspace.CurrentCamera
+local fovOriginal = camera and camera.FieldOfView or 70
 Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
-    if Workspace.CurrentCamera then camera = Workspace.CurrentCamera end
+    if Workspace.CurrentCamera then
+        camera = Workspace.CurrentCamera
+        fovOriginal = camera.FieldOfView
+    end
 end)
 
 --==============================================================
@@ -71,7 +55,11 @@ local S = {
     showLocal     = false,
     fovCircle     = false,
     fovRadius     = 240,
+    aimFov        = true,
     maxDist       = 600,
+    fovEnabled    = false,
+    fovValue      = 90,
+    fovSmooth     = true,
     watchEnabled  = true,
     autoRejoin    = true,
     rejoinDelay   = 1.5,
@@ -104,7 +92,7 @@ end
 local function new(class, props, parent)
     local inst = Instance.new(class)
     for k, v in pairs(props or {}) do inst[k] = v end
-    for _, child in ipairs(parent and {parent} or {}) do inst.Parent = child end
+    if parent then inst.Parent = parent end
     return inst
 end
 
@@ -117,8 +105,8 @@ local gui = new("ScreenGui", {
 }, gethui())
 
 local main = new("Frame", {
-    Size = UDim2.fromOffset(486, 330),
-    Position = UDim2.new(0.5, -243, 0.5, -165),
+    Size = UDim2.fromOffset(486, 348),
+    Position = UDim2.new(0.5, -243, 0.5, -174),
     BackgroundColor3 = Color3.fromRGB(13, 15, 20),
     BorderSizePixel = 0,
     ClipsDescendants = true,
@@ -145,7 +133,7 @@ grad.Transparency = NumberSequence.new({
     NumberSequenceKeypoint.new(1, 1),
 })
 
-local title = new("TextLabel", {
+new("TextLabel", {
     Text = "SleepScript",
     Font = Enum.Font.GothamBold,
     TextSize = 20,
@@ -157,13 +145,13 @@ local title = new("TextLabel", {
 }, header)
 
 new("TextLabel", {
-    Text = "counter blox  •  drawing-only esp  •  rac watch",
+    Text = "counter blox  •  drawing-only esp  •  rac watch  •  fov",
     Font = Enum.Font.Gotham,
     TextSize = 11,
     TextColor3 = Color3.fromRGB(150, 150, 175),
     BackgroundTransparency = 1,
     Position = UDim2.fromOffset(17, 31),
-    Size = UDim2.fromOffset(300, 14),
+    Size = UDim2.fromOffset(320, 14),
     TextXAlignment = Enum.TextXAlignment.Left,
 }, header)
 
@@ -191,14 +179,11 @@ local function headerButton(x, symbol, cb)
     return b
 end
 
-headerButton(-58, "—", function()
-    main.Visible = not main.Visible
-end)
+headerButton(-58, "—", function() main.Visible = not main.Visible end)
 headerButton(-32, "×", function()
     if getgenv().SleepScript then getgenv().SleepScript.Unload() end
 end)
 
--- перетаскивание
 local dragging, dragStart, startPos
 track(header.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
@@ -236,7 +221,7 @@ local content = new("Frame", {
 }, main)
 new("UIPadding", { PaddingTop = UDim.new(0, 12), PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 14) }, content)
 
-local pages = {}
+local pages, tabs = {}, {}
 local function page(name)
     local f = new("ScrollingFrame", {
         Size = UDim2.fromScale(1, 1),
@@ -253,7 +238,6 @@ local function page(name)
     return f
 end
 
-local tabs = {}
 local function tabButton(label, key)
     local b = new("TextButton", {
         Text = label,
@@ -279,7 +263,7 @@ local function tabButton(label, key)
 end
 
 local function section(parent, text)
-    local l = new("TextLabel", {
+    return new("TextLabel", {
         Text = string.upper(text),
         Font = Enum.Font.GothamBold,
         TextSize = 10,
@@ -288,14 +272,10 @@ local function section(parent, text)
         Size = UDim2.new(1, 0, 0, 16),
         TextXAlignment = Enum.TextXAlignment.Left,
     }, parent)
-    return l
 end
 
 local function row(parent)
-    return new("Frame", {
-        Size = UDim2.new(1, 0, 0, 28),
-        BackgroundTransparency = 1,
-    }, parent)
+    return new("Frame", { Size = UDim2.new(1, 0, 0, 28), BackgroundTransparency = 1 }, parent)
 end
 
 local function toggle(parent, text, default, cb)
@@ -321,7 +301,6 @@ local function toggle(parent, text, default, cb)
         local info = TweenInfo.new(instant and 0 or 0.14, Enum.EasingStyle.Quad)
         TweenService:Create(knob, info, {
             Position = state and UDim2.fromOffset(18, 2) or UDim2.fromOffset(2, 2),
-            BackgroundColor3 = state and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(230, 230, 240),
         }):Play()
         TweenService:Create(pill, info, {
             BackgroundColor3 = state and CONFIG.Accent or Color3.fromRGB(44, 44, 58),
@@ -329,11 +308,7 @@ local function toggle(parent, text, default, cb)
     end
     render(true)
 
-    local function set(v)
-        state = v
-        render()
-        cb(v)
-    end
+    local function set(v) state = v; render(); cb(v) end
     pill.InputBegan:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
             set(not state)
@@ -344,7 +319,7 @@ end
 
 local function slider(parent, text, min, max, default, cb)
     local holder = new("Frame", { Size = UDim2.new(1, 0, 0, 40), BackgroundTransparency = 1 }, parent)
-    local label = new("TextLabel", {
+    new("TextLabel", {
         Text = text, Font = Enum.Font.Gotham, TextSize = 13,
         TextColor3 = Color3.fromRGB(212, 212, 225), BackgroundTransparency = 1,
         Size = UDim2.new(1, -60, 0, 18), TextXAlignment = Enum.TextXAlignment.Left,
@@ -390,8 +365,7 @@ local function slider(parent, text, min, max, default, cb)
             end)
         end
     end)
-    return { set = function(v) value = v; apply(track.AbsolutePosition.X + track.AbsoluteSize.X * ((v - min) / (max - min))) end,
-             get = function() return value end }
+    return { set = function(v) value = v end, get = function() return value end }
 end
 
 local function button(parent, text, cb)
@@ -413,20 +387,24 @@ local function button(parent, text, cb)
 end
 
 --==============================================================
---  ESP
+--  ESP + FOV
 --==============================================================
 local ESP = { objects = {} }
 local FONT = (Drawing.Fonts and Drawing.Fonts.UI) or 2
 
+local function sq(filled)
+    local o = Drawing.new("Square")
+    o.Filled = filled
+    o.Visible = false
+    o.Thickness = 1
+    return o
+end
+
 local function blankRec()
-    local function sq(filled)
-        local o = Drawing.new("Square")
-        o.Filled = filled; o.Visible = false; o.Thickness = 1
-        return o
-    end
     local rec = {
         box = sq(false), boxFill = sq(true),
         hpBg = sq(true), hp = sq(true),
+        marker = sq(false),
         name = Drawing.new("Text"), dist = Drawing.new("Text"),
         tracer = Drawing.new("Line"),
         bones = {},
@@ -437,12 +415,25 @@ local function blankRec()
     rec.dist.Size = 12; rec.dist.OutlineColor = Color3.fromRGB(0, 0, 0)
     rec.tracer.Thickness = 1
     rec.boxFill.Transparency = 0.9
+    rec.marker.Thickness = 2
+    rec.marker.Color = CONFIG.Accent
     for i = 1, 15 do
         local l = Drawing.new("Line")
-        l.Thickness = 1; l.Visible = false
+        l.Thickness = 1
+        l.Visible = false
         rec.bones[i] = l
     end
     return rec
+end
+
+local function hide(rec)
+    for k, o in pairs(rec) do
+        if k == "bones" then
+            for _, b in ipairs(o) do b.Visible = false end
+        else
+            pcall(function() o.Visible = false end)
+        end
+    end
 end
 
 local BONES = {
@@ -459,18 +450,6 @@ local BONES = {
     },
 }
 
-local function hide(rec)
-    for _, o in pairs(rec) do
-        if typeof(o) == "table" then
-            for _, b in ipairs(o) do b.Visible = false end
-        elseif typeof(o) == "Instance" then
-            -- пропуск
-        else
-            pcall(function() o.Visible = false end)
-        end
-    end
-end
-
 local fovCircle = Drawing.new("Circle")
 fovCircle.Thickness = 1
 fovCircle.Filled = false
@@ -478,11 +457,15 @@ fovCircle.Color = CONFIG.Accent
 fovCircle.Transparency = 0.55
 fovCircle.Visible = false
 
+local targetMarker = sq(false)
+targetMarker.Thickness = 2
+targetMarker.Color = CONFIG.Accent
+
 local function bindPlayer(player)
     if ESP.objects[player] then return end
-    ESP.objects[player] = { rec = blankRec(), char = nil }
+    local entry = { rec = blankRec(), char = nil }
+    ESP.objects[player] = entry
 
-    local entry = ESP.objects[player]
     local function onChar(char)
         entry.char = char
         task.spawn(function()
@@ -498,8 +481,7 @@ end
 local function unbindPlayer(player)
     local entry = ESP.objects[player]
     if not entry then return end
-    local rec = entry.rec
-    for _, o in pairs(rec) do
+    for _, o in pairs(entry.rec) do
         if type(o) == "table" then
             for _, b in ipairs(o) do pcall(function() b:Remove() end) end
         else
@@ -520,6 +502,7 @@ rayParams.IgnoreWater = true
 
 local visState, visClock = {}, {}
 local lastInterval, fpsSmooth = 0.016, 60
+local fovRestoring = false
 
 local function accentColor(player, visible)
     if player.Team and player.Team == lp.Team then
@@ -529,14 +512,41 @@ local function accentColor(player, visible)
 end
 
 local function frameUpdate(dt)
+    -- === FOV камеры ===
+    if camera then
+        if S.fovEnabled then
+            fovRestoring = true
+            if S.fovSmooth then
+                local cur = camera.FieldOfView
+                camera.FieldOfView = cur + (S.fovValue - cur) * math.min(dt * 10, 1)
+            else
+                camera.FieldOfView = S.fovValue
+            end
+        elseif fovRestoring then
+            local cur = camera.FieldOfView
+            local nxt = cur + (fovOriginal - cur) * math.min(dt * 10, 1)
+            if math.abs(nxt - fovOriginal) < 0.15 then
+                camera.FieldOfView = fovOriginal
+                fovRestoring = false
+            else
+                camera.FieldOfView = nxt
+            end
+        end
+    end
+
     if not S.espEnabled or not camera then
-        if fovCircle.Visible then fovCircle.Visible = false end
+        fovCircle.Visible = false
+        targetMarker.Visible = false
         return
     end
 
     fpsSmooth = fpsSmooth * 0.9 + (1 / math.max(dt, 0.001)) * 0.1
     local base = 0.016
-    if S.paranoid then base = 0.1 elseif S.adaptive and fpsSmooth < 42 then base = 0.034 end
+    if S.paranoid then
+        base = 0.1
+    elseif S.adaptive and fpsSmooth < 42 then
+        base = 0.034
+    end
     lastInterval = base * (0.9 + math.random() * 0.2)
 
     local now = os.clock()
@@ -548,9 +558,11 @@ local function frameUpdate(dt)
         fovCircle.Position = Vector2.new(cx, cy)
         fovCircle.Radius = S.fovRadius
         fovCircle.Visible = true
-    elseif fovCircle.Visible then
+    else
         fovCircle.Visible = false
     end
+
+    local bestPos, bestSize, bestD = nil, nil, S.fovRadius
 
     for player, entry in pairs(ESP.objects) do
         local rec = entry.rec
@@ -562,10 +574,8 @@ local function frameUpdate(dt)
             local dist = (camPos - headPos).Magnitude
 
             if dist <= S.maxDist and not (S.teamCheck and player.Team == lp.Team and player ~= lp) then
-                local top = headPos + Vector3.new(0, 1.1, 0)
-                local bottom = root.Position - Vector3.new(0, 2.5, 0)
-                local sTop, onTop = camera:WorldToViewportPoint(top)
-                local sBot, onBot = camera:WorldToViewportPoint(bottom)
+                local sTop, onTop = camera:WorldToViewportPoint(headPos + Vector3.new(0, 1.1, 0))
+                local sBot, onBot = camera:WorldToViewportPoint(root.Position - Vector3.new(0, 2.5, 0))
 
                 if onTop and onBot and sTop.Z > 0 and sBot.Z > 0 and sBot.Y > sTop.Y then
                     local h = sBot.Y - sTop.Y
@@ -573,15 +583,13 @@ local function frameUpdate(dt)
                     local x = sTop.X - w / 2
                     local y = sTop.Y
 
-                    -- видимость: рейкаст не чаще ~6 раз/сек на игрока
                     if not visClock[player] or now - visClock[player] > 0.15 then
                         visClock[player] = now
                         rayParams.FilterDescendantsInstances = { entry.char, lp.Character }
                         local hit = Workspace:Raycast(camPos, headPos - camPos, rayParams)
                         visState[player] = (hit == nil or (entry.char and hit.Instance:IsDescendantOf(entry.char)))
                     end
-                    local visible = visState[player] ~= false
-                    local col = accentColor(player, visible)
+                    local col = accentColor(player, visState[player] ~= false)
 
                     if S.box then
                         rec.box.Color = col
@@ -615,21 +623,27 @@ local function frameUpdate(dt)
                         rec.name.Color = col
                         rec.name.Position = Vector2.new(x + w / 2, y - 16)
                         rec.name.Visible = true
-                    else rec.name.Visible = false end
+                    else
+                        rec.name.Visible = false
+                    end
 
                     if S.distance then
                         rec.dist.Text = string.format("%d m", math.floor(dist / 3.5))
                         rec.dist.Color = col
                         rec.dist.Position = Vector2.new(x + w / 2, y + h + 2)
                         rec.dist.Visible = true
-                    else rec.dist.Visible = false end
+                    else
+                        rec.dist.Visible = false
+                    end
 
                     if S.tracer then
                         rec.tracer.From = Vector2.new(cx, vp.Y)
                         rec.tracer.To = Vector2.new(x + w / 2, y + h)
                         rec.tracer.Color = col
                         rec.tracer.Visible = true
-                    else rec.tracer.Visible = false end
+                    else
+                        rec.tracer.Visible = false
+                    end
 
                     if S.skeleton and entry.char then
                         local list = BONES[hum.RigType]
@@ -653,6 +667,14 @@ local function frameUpdate(dt)
                     else
                         for _, l in ipairs(rec.bones) do l.Visible = false end
                     end
+
+                    if S.aimFov then
+                        local px, py = x + w / 2, y + h / 2
+                        local d = math.sqrt((px - cx) ^ 2 + (py - cy) ^ 2)
+                        if d < bestD then
+                            bestD, bestPos, bestSize = d, Vector2.new(px, py), Vector2.new(w, h)
+                        end
+                    end
                 else
                     hide(rec)
                 end
@@ -663,6 +685,14 @@ local function frameUpdate(dt)
             hide(rec)
         end
     end
+
+    if bestPos then
+        targetMarker.Position = bestPos - bestSize / 2 - Vector2.new(3, 3)
+        targetMarker.Size = bestSize + Vector2.new(6, 6)
+        targetMarker.Visible = true
+    else
+        targetMarker.Visible = false
+    end
 end
 
 local espAccum = 0
@@ -670,19 +700,30 @@ track(RunService.RenderStepped:Connect(function(dt)
     espAccum += dt
     if espAccum < lastInterval then return end
     espAccum = 0
-    pcall(frameUpdate, dt)
+    if S.espEnabled or S.fovEnabled or fovRestoring then
+        pcall(frameUpdate, dt)
+    end
 end))
 
 --==============================================================
 --  АВТОБАННИХОП
 --==============================================================
-local BAN_PATTERNS = {
-    "banned by", "you have been banned", "kicked by", "rac", "anti-cheat",
-    "anticheat", "exploit detected", "suspicious activity", "cheat detected",
-    "detected:", "remove your exploits",
+local BAN_HARD = {
+    "you have been banned", "you've been banned", "banned by rac",
+    "kicked by rac", "exploit detected", "cheat detected",
+    "anti-cheat", "anticheat", "suspicious activity",
+    "remove your exploits", "detected exploiting",
+}
+
+local BAN_IGNORE = {
+    "accuracy", "tracer", "trace", "rack", "character", "practice",
+    "spectate", "spectator", "grenade",
 }
 
 local banCooldown, banSeen = 0, {}
+local softHits, softUntil = 0, 0
+local loadTime = os.clock()
+local hopping = false
 
 local function getRandomServer()
     local ok, body = pcall(function()
@@ -704,6 +745,8 @@ local function getRandomServer()
 end
 
 local function rejoin()
+    if hopping then return end
+    hopping = true
     if CONFIG.ScriptURL ~= "" and queue_on_teleport then
         pcall(queue_on_teleport, string.format("loadstring(game:HttpGet('%s'))()", CONFIG.ScriptURL))
     end
@@ -717,33 +760,55 @@ local function rejoin()
         if ok then return end
     end
     pcall(function() TeleportService:Teleport(game.PlaceId, lp) end)
+    task.delay(8, function() hopping = false end)
 end
 
-local function onBan(reason)
+local function onBan(reason, hard, force)
     local now = os.clock()
+    if not force and (now - loadTime) < CONFIG.DetectGrace then return end
     if now < banCooldown then return end
-    banCooldown = now + 6
 
+    if not hard and not force then
+        if now > softUntil then softHits = 0 end
+        softHits += 1
+        softUntil = now + 2
+        if softHits < 2 then return end
+        softHits = 0
+    end
+
+    banCooldown = now + 6
     S.banCount += 1
     S.lastReason = reason
     logFile(string.format("DETECT #%d: %s", S.banCount, reason))
-    notify("RAC: " .. reason .. " — хоп через " .. S.rejoinDelay .. "с")
+    notify("RAC: " .. reason .. (CONFIG.LogOnly and " (лог)" or " — хоп"))
 
     if S.banCount >= 3 and not S.paranoid then
         S.paranoid = true
-        S.adaptive = true
-        notify("3 детекта подряд → включена паранойя")
+        notify("3 детекта → паранойя включена")
     end
 
-    if S.autoRejoin then
+    if S.autoRejoin and not CONFIG.LogOnly then
         task.delay(S.rejoinDelay, rejoin)
     end
 end
 
 local function matchText(text)
     local lower = string.lower(text)
-    for _, pat in ipairs(BAN_PATTERNS) do
-        if string.find(lower, pat, 1, true) then return pat end
+    if #lower > 90 then return nil end
+    for _, ign in ipairs(BAN_IGNORE) do
+        if lower == ign then return nil end
+    end
+    for _, pat in ipairs(BAN_HARD) do
+        if string.find(lower, pat, 1, true) then return pat, true end
+    end
+    if #lower <= 45 and string.find(lower, "%f[%a]rac%f[%A]") then
+        if lower == "rac"
+            or string.find(lower, "ban", 1, true)
+            or string.find(lower, "kick", 1, true)
+            or string.find(lower, "detect", 1, true)
+            or string.find(lower, "cheat", 1, true) then
+            return "rac", false
+        end
     end
     return nil
 end
@@ -752,53 +817,48 @@ local function scanGui(root)
     if not root then return end
     for _, d in ipairs(root:GetDescendants()) do
         if d:IsA("TextLabel") and d.Visible and #d.Text > 4 then
-            if not banSeen[d.Text] then
-                local pat = matchText(d.Text)
+            local key = string.lower(d.Text)
+            if not banSeen[key] then
+                local pat, hard = matchText(d.Text)
                 if pat then
-                    banSeen[d.Text] = true
-                    onBan(pat)
+                    banSeen[key] = true
+                    onBan(pat, hard)
                 end
             end
         end
     end
 end
 
--- чат
 task.spawn(function()
     local ev = ReplicatedStorage:WaitForChild("DefaultChatSystemChatEvents", 8)
     if ev and ev:FindFirstChild("OnMessageDoneFiltering") then
         track(ev.OnMessageDoneFiltering.OnClientEvent:Connect(function(msg)
             if not S.watchEnabled or type(msg) ~= "table" then return end
-            local pat = matchText(tostring(msg.Message or ""))
-            if pat then onBan(pat) end
+            local pat, hard = matchText(tostring(msg.Message or ""))
+            if pat then onBan(pat, hard) end
         end))
     end
 end)
 
--- GUI
 task.spawn(function()
     while task.wait(0.8) do
         if not S.watchEnabled then continue end
-        if #banSeen > 120 then banSeen = {} end
+        if #banSeen > 200 then banSeen = {} end
         pcall(scanGui, lp:FindFirstChild("PlayerGui"))
         pcall(scanGui, gethui())
     end
 end)
 
--- сам кик
 track(lp.AncestryChanged:Connect(function(_, parent)
-    if not parent and S.watchEnabled then onBan("localplayer removed") end
+    if not parent and S.watchEnabled then onBan("localplayer removed", true, true) end
 end))
 
 --==============================================================
 --  СТРАНИЦЫ
 --==============================================================
-local visualPage = page("visual")
-tabButton("Визуал", "visual")
-local watchPage = page("watch")
-tabButton("Автобан", "watch")
-local miscPage = page("misc")
-tabButton("Прочее", "misc")
+local visualPage = page("visual"); tabButton("Визуал", "visual")
+local watchPage  = page("watch");  tabButton("Автобан", "watch")
+local miscPage   = page("misc");   tabButton("Прочее", "misc")
 
 section(visualPage, "esp")
 toggle(visualPage, "Включить ESP", false, function(v) S.espEnabled = v end)
@@ -809,16 +869,26 @@ toggle(visualPage, "Дистанция", true, function(v) S.distance = v end)
 toggle(visualPage, "Трассеры", false, function(v) S.tracer = v end)
 toggle(visualPage, "Скелет", false, function(v) S.skeleton = v end)
 
+section(visualPage, "fov")
+toggle(visualPage, "Изменить FOV камеры", false, function(v)
+    if v then fovOriginal = camera and camera.FieldOfView or 70 end
+    S.fovEnabled = v
+end)
+slider(visualPage, "Значение FOV", 70, 120, 90, function(v) S.fovValue = v end)
+toggle(visualPage, "Плавный переход", true, function(v) S.fovSmooth = v end)
+toggle(visualPage, "Круг FOV", false, function(v) S.fovCircle = v end)
+slider(visualPage, "Радиус FOV", 60, 500, 240, function(v) S.fovRadius = v end)
+toggle(visualPage, "Метка цели в FOV", true, function(v) S.aimFov = v end)
+
 section(visualPage, "фильтры")
 toggle(visualPage, "Игнорировать союзников", true, function(v) S.teamCheck = v end)
 toggle(visualPage, "Показывать себя", false, function(v) S.showLocal = v end)
-toggle(visualPage, "Круг FOV", false, function(v) S.fovCircle = v end)
-slider(visualPage, "Радиус FOV", 60, 500, 240, function(v) S.fovRadius = v end)
 slider(visualPage, "Макс. дистанция (студы)", 100, 2000, 600, function(v) S.maxDist = v end)
 
 section(watchPage, "наблюдение")
 toggle(watchPage, "Следить за RAC", true, function(v) S.watchEnabled = v end)
 toggle(watchPage, "Автопереподключение", true, function(v) S.autoRejoin = v end)
+toggle(watchPage, "Только логировать", false, function(v) CONFIG.LogOnly = v end)
 slider(watchPage, "Задержка хопа (0.1с)", 1, 30, 15, function(v) S.rejoinDelay = v / 10 end)
 
 local statusLabel = new("TextLabel", {
@@ -833,11 +903,8 @@ local statusLabel = new("TextLabel", {
 }, watchPage)
 
 section(watchPage, "действия")
-button(watchPage, "Проверить детект вручную", function() onBan("manual test") end)
-button(watchPage, "Хопнуть сейчас", function()
-    notify("Хоп…")
-    rejoin()
-end)
+button(watchPage, "Проверить детект вручную", function() onBan("manual test", true, true) end)
+button(watchPage, "Хопнуть сейчас", function() notify("Хоп…"); rejoin() end)
 
 section(miscPage, "производительность")
 toggle(miscPage, "Паранойя (тик 10 Гц)", false, function(v) S.paranoid = v end)
@@ -847,6 +914,7 @@ section(miscPage, "безопасность")
 button(miscPage, "PANIC — выключить всё", function()
     S.espEnabled = false
     S.fovCircle = false
+    S.fovEnabled = false
     notify("Всё выключено")
 end)
 button(miscPage, "Выгрузить скрипт", function()
@@ -854,7 +922,7 @@ button(miscPage, "Выгрузить скрипт", function()
 end)
 
 --==============================================================
---  ЦИКЛ СТАТУСА / КЕЙБИНД
+--  СЛУЖЕБНОЕ
 --==============================================================
 track(RunService.Heartbeat:Connect(function()
     statusLabel.Text = string.format("Детектов: %d\nПоследнее: %s", S.banCount, S.lastReason)
@@ -862,15 +930,12 @@ end))
 
 track(UIS.InputBegan:Connect(function(input, processed)
     if processed then return end
-    if input.KeyCode == CONFIG.Keybind then
-        main.Visible = not main.Visible
-    end
+    if input.KeyCode == CONFIG.Keybind then main.Visible = not main.Visible end
 end))
 
--- анимация появления
-main.Position = UDim2.new(0.5, -243, 0.5, -155)
+main.Position = UDim2.new(0.5, -243, 0.5, -164)
 TweenService:Create(main, TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
-    Position = UDim2.new(0.5, -243, 0.5, -165),
+    Position = UDim2.new(0.5, -243, 0.5, -174),
 }):Play()
 
 pages.visual.Visible = true
@@ -884,6 +949,8 @@ local function unload()
     for _, c in ipairs(connections) do pcall(function() c:Disconnect() end) end
     for player in pairs(ESP.objects) do unbindPlayer(player) end
     pcall(function() fovCircle:Remove() end)
+    pcall(function() targetMarker:Remove() end)
+    if camera then pcall(function() camera.FieldOfView = fovOriginal end) end
     pcall(function() gui:Destroy() end)
     getgenv().SleepScript = nil
 end
