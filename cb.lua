@@ -2,8 +2,8 @@
 --[[
     SleepScript • Counter Blox (Rolve)
     ---------------------------------------------------------------
-    ESP на Drawing с полной кастомизацией, бхоп, фиксация FOV,
-    автобаннихоп со строгим детектом.
+    ESP с кастомизацией, бхоп, pixel slide, фиксация FOV,
+    небо с пресетами, автобаннихоп.
 --]]
 
 local CONFIG = {
@@ -13,6 +13,7 @@ local CONFIG = {
     Keybind     = Enum.KeyCode.RightShift,
     DetectGrace = 20,
     LogOnly     = false,
+    Version     = "1.3",
 }
 
 if getgenv().SleepScript then pcall(function() getgenv().SleepScript.Unload() end) end
@@ -29,6 +30,7 @@ local TweenService      = cloneref(game:GetService("TweenService"))
 local TeleportService   = cloneref(game:GetService("TeleportService"))
 local HttpService       = cloneref(game:GetService("HttpService"))
 local ReplicatedStorage = cloneref(game:GetService("ReplicatedStorage"))
+local Lighting          = cloneref(game:GetService("Lighting"))
 local Workspace         = cloneref(workspace)
 local lp                = Players.LocalPlayer
 
@@ -44,22 +46,22 @@ local S = {
     adaptive     = true,
     espEnabled   = false,
 
-    style        = "full",        -- full | corner | cross | dot
+    style        = "full",
     thickness    = 1,
     cornerSize   = 9,
     fill         = false,
     fillAlpha    = 0.85,
     textSize     = 13,
-    nameMode     = "name",        -- name | display | both | off
+    nameMode     = "name",
     showDist     = true,
-    distUnit     = "m",           -- m | studs
-    hpMode       = "bar",         -- bar | text | off
-    hpSide       = "left",        -- left | right
+    distUnit     = "m",
+    hpMode       = "bar",
+    hpSide       = "left",
     skeleton     = false,
     tracer       = false,
     offscreen    = false,
 
-    colorMode    = "static",      -- static | team | health | distance
+    colorMode    = "static",
     colorStatic  = Color3.fromRGB(235, 235, 245),
     colorHidden  = Color3.fromRGB(150, 150, 165),
     colorTracer  = Color3.fromRGB(122, 92, 255),
@@ -69,7 +71,8 @@ local S = {
     maxDist      = 600,
 
     bhop         = false,
-    jumpLimit    = 0,             -- -1 = бесконечно, 0 = бхоп, N = N прыжков
+    jumpLimit    = 0,
+    pixelSlide   = false,
 
     fovEnabled   = false,
     fovValue     = 90,
@@ -158,56 +161,86 @@ local gui = new("ScreenGui", {
     DisplayOrder = 9999,
 }, gethui())
 
+local glow = new("Frame", {
+    Size = UDim2.fromOffset(502, 376),
+    Position = UDim2.new(0.5, -251, 0.5, -188),
+    BackgroundColor3 = CONFIG.Accent,
+    BackgroundTransparency = 0.86,
+    BorderSizePixel = 0,
+    ZIndex = 0,
+}, gui)
+new("UICorner", { CornerRadius = UDim.new(0, 20) }, glow)
+
 local main = new("Frame", {
     Size = UDim2.fromOffset(486, 360),
     Position = UDim2.new(0.5, -243, 0.5, -180),
     BackgroundColor3 = Color3.fromRGB(13, 15, 20),
     BorderSizePixel = 0,
     ClipsDescendants = true,
+    ZIndex = 1,
 }, gui)
 new("UICorner", { CornerRadius = UDim.new(0, 12) }, main)
-new("UIStroke", { Color = CONFIG.Accent, Thickness = 1, Transparency = 0.55 }, main)
+new("UIStroke", { Color = CONFIG.Accent, Thickness = 1, Transparency = 0.5 }, main)
 
 local header = new("Frame", {
-    Size = UDim2.new(1, 0, 0, 54),
-    BackgroundColor3 = Color3.fromRGB(20, 18, 34),
+    Size = UDim2.new(1, 0, 0, 58),
+    BackgroundColor3 = Color3.fromRGB(19, 17, 32),
     BorderSizePixel = 0,
+    ZIndex = 2,
 }, main)
 new("UICorner", { CornerRadius = UDim.new(0, 12) }, header)
 new("Frame", {
-    Size = UDim2.new(1, 0, 0, 14), Position = UDim2.new(0, 0, 1, -14),
-    BackgroundColor3 = Color3.fromRGB(20, 18, 34), BorderSizePixel = 0,
+    Size = UDim2.new(1, 0, 0, 16), Position = UDim2.new(0, 0, 1, -16),
+    BackgroundColor3 = Color3.fromRGB(19, 17, 32), BorderSizePixel = 0,
 }, header)
 local grad = new("UIGradient", {
     Color = ColorSequence.new(CONFIG.Accent, CONFIG.AccentDark),
     Rotation = 25,
 }, header)
 grad.Transparency = NumberSequence.new({
-    NumberSequenceKeypoint.new(0, 0.82),
+    NumberSequenceKeypoint.new(0, 0.78),
     NumberSequenceKeypoint.new(1, 1),
 })
 
-new("TextLabel", {
+local title = new("TextLabel", {
     Text = "SleepScript",
     Font = Enum.Font.GothamBold,
-    TextSize = 20,
+    TextSize = 21,
     TextColor3 = Color3.fromRGB(255, 255, 255),
     BackgroundTransparency = 1,
-    Position = UDim2.fromOffset(16, 9),
-    Size = UDim2.fromOffset(240, 22),
+    Position = UDim2.fromOffset(17, 9),
+    Size = UDim2.fromOffset(240, 24),
     TextXAlignment = Enum.TextXAlignment.Left,
+    ZIndex = 3,
 }, header)
+new("UIGradient", {
+    Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), CONFIG.Accent),
+    Rotation = 12,
+}, title)
 
 new("TextLabel", {
-    Text = "counter blox  •  custom esp  •  bhop  •  fov  •  rac watch",
+    Text = "counter blox  •  esp  •  bhop  •  slide  •  sky  •  rac watch",
     Font = Enum.Font.Gotham,
     TextSize = 11,
     TextColor3 = Color3.fromRGB(150, 150, 175),
     BackgroundTransparency = 1,
-    Position = UDim2.fromOffset(17, 31),
-    Size = UDim2.fromOffset(340, 14),
+    Position = UDim2.fromOffset(18, 33),
+    Size = UDim2.fromOffset(350, 14),
     TextXAlignment = Enum.TextXAlignment.Left,
+    ZIndex = 3,
 }, header)
+
+local accentLine = new("Frame", {
+    Size = UDim2.new(0, 46, 0, 2),
+    Position = UDim2.fromOffset(18, 53),
+    BackgroundColor3 = CONFIG.Accent,
+    BorderSizePixel = 0,
+    ZIndex = 3,
+}, header)
+new("UICorner", { CornerRadius = UDim.new(1, 0) }, accentLine)
+TweenService:Create(accentLine, TweenInfo.new(2.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {
+    Size = UDim2.new(0, 96, 0, 2),
+}):Play()
 
 local function headerButton(x, symbol, cb)
     local b = new("TextButton", {
@@ -219,8 +252,9 @@ local function headerButton(x, symbol, cb)
         BackgroundTransparency = 0.35,
         BorderSizePixel = 0,
         AutoButtonColor = false,
-        Position = UDim2.new(1, x, 0, 16),
+        Position = UDim2.new(1, x, 0, 18),
         Size = UDim2.fromOffset(22, 22),
+        ZIndex = 4,
     }, header)
     new("UICorner", { CornerRadius = UDim.new(0, 6) }, b)
     b.MouseEnter:Connect(function()
@@ -251,6 +285,8 @@ track(UIS.InputChanged:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
         local d = input.Position - dragStart
         main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+        glow.Position = UDim2.new(main.Position.X.Scale, main.Position.X.Offset - 8,
+            main.Position.Y.Scale, main.Position.Y.Offset - 8)
     end
 end))
 track(UIS.InputEnded:Connect(function(input)
@@ -260,22 +296,39 @@ track(UIS.InputEnded:Connect(function(input)
 end))
 
 local sidebar = new("Frame", {
-    Size = UDim2.new(0, 116, 1, -54),
-    Position = UDim2.fromOffset(0, 54),
-    BackgroundColor3 = Color3.fromRGB(16, 17, 23),
+    Size = UDim2.new(0, 118, 1, -58),
+    Position = UDim2.fromOffset(0, 58),
+    BackgroundColor3 = Color3.fromRGB(15, 16, 22),
     BorderSizePixel = 0,
 }, main)
-new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, sidebar)
-new("UIPadding", { PaddingTop = UDim.new(0, 12), PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, sidebar)
+new("UIListLayout", { Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder }, sidebar)
+new("UIPadding", { PaddingTop = UDim.new(0, 10), PaddingLeft = UDim.new(0, 9), PaddingRight = UDim.new(0, 9) }, sidebar)
 
 local content = new("Frame", {
-    Size = UDim2.new(1, -116, 1, -54),
-    Position = UDim2.fromOffset(116, 54),
+    Size = UDim2.new(1, -118, 1, -82),
+    Position = UDim2.fromOffset(118, 58),
     BackgroundTransparency = 1,
 }, main)
-new("UIPadding", { PaddingTop = UDim.new(0, 12), PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 14) }, content)
+new("UIPadding", { PaddingTop = UDim.new(0, 10), PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 14) }, content)
 
-local pages, tabs = {}, {}
+local footer = new("Frame", {
+    Size = UDim2.new(1, -118, 0, 24),
+    Position = UDim2.new(0, 118, 1, -24),
+    BackgroundColor3 = Color3.fromRGB(15, 16, 22),
+    BorderSizePixel = 0,
+}, main)
+new("TextLabel", {
+    Text = "v" .. CONFIG.Version .. "  •  RightShift — меню",
+    Font = Enum.Font.Gotham,
+    TextSize = 10,
+    TextColor3 = Color3.fromRGB(105, 105, 125),
+    BackgroundTransparency = 1,
+    Position = UDim2.fromOffset(12, 4),
+    Size = UDim2.new(1, -24, 0, 16),
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, footer)
+
+local pages, tabs, tabBars = {}, {}, {}
 local function page(name)
     local f = new("ScrollingFrame", {
         Size = UDim2.fromScale(1, 1),
@@ -305,18 +358,45 @@ local function tabButton(label, key)
         Size = UDim2.new(1, 0, 0, 30),
     }, sidebar)
     new("UICorner", { CornerRadius = UDim.new(0, 7) }, b)
+
+    local bar = new("Frame", {
+        Size = UDim2.new(0, 3, 0, 14),
+        Position = UDim2.new(0, 0, 0.5, -7),
+        BackgroundColor3 = CONFIG.Accent,
+        BorderSizePixel = 0,
+        Visible = false,
+    }, b)
+    new("UICorner", { CornerRadius = UDim.new(1, 0) }, bar)
+
     tabs[key] = b
+    tabBars[key] = bar
+    b.MouseEnter:Connect(function()
+        if not pages[key].Visible then
+            TweenService:Create(b, TweenInfo.new(0.12), { BackgroundTransparency = 0.15 }):Play()
+        end
+    end)
+    b.MouseLeave:Connect(function()
+        if not pages[key].Visible then
+            TweenService:Create(b, TweenInfo.new(0.12), { BackgroundTransparency = 0.4 }):Play()
+        end
+    end)
     b.MouseButton1Click:Connect(function()
         for k, p in pairs(pages) do p.Visible = (k == key) end
         for k, t in pairs(tabs) do
             t.TextColor3 = (k == key) and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(150, 150, 170)
             t.BackgroundColor3 = (k == key) and CONFIG.AccentDark or Color3.fromRGB(22, 23, 32)
+            tabBars[k].Visible = (k == key)
         end
     end)
     return b
 end
 
 local function section(parent, text)
+    new("Frame", {
+        Size = UDim2.new(1, 0, 0, 1),
+        BackgroundColor3 = Color3.fromRGB(34, 34, 46),
+        BorderSizePixel = 0,
+    }, parent)
     return new("TextLabel", {
         Text = string.upper(text),
         Font = Enum.Font.GothamBold,
@@ -384,26 +464,26 @@ local function slider(parent, text, min, max, default, cb)
         Size = UDim2.fromOffset(56, 18), Position = UDim2.new(1, -56, 0, 0),
         TextXAlignment = Enum.TextXAlignment.Right,
     }, holder)
-    local track = new("Frame", {
+    local trackF = new("Frame", {
         Size = UDim2.new(1, 0, 0, 5), Position = UDim2.fromOffset(0, 26),
         BackgroundColor3 = Color3.fromRGB(40, 40, 54), BorderSizePixel = 0,
     }, holder)
-    new("UICorner", { CornerRadius = UDim.new(1, 0) }, track)
+    new("UICorner", { CornerRadius = UDim.new(1, 0) }, trackF)
     local fill = new("Frame", {
         Size = UDim2.fromScale((default - min) / (max - min), 1),
         BackgroundColor3 = CONFIG.Accent, BorderSizePixel = 0,
-    }, track)
+    }, trackF)
     new("UICorner", { CornerRadius = UDim.new(1, 0) }, fill)
 
     local value = default
     local function apply(px)
-        local rel = math.clamp((px - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+        local rel = math.clamp((px - trackF.AbsolutePosition.X) / trackF.AbsoluteSize.X, 0, 1)
         value = math.floor(min + rel * (max - min) + 0.5)
         fill.Size = UDim2.fromScale(rel, 1)
         valueLabel.Text = tostring(value)
         cb(value)
     end
-    track.InputBegan:Connect(function(i)
+    trackF.InputBegan:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
             apply(i.Position.X)
             local conn
@@ -440,13 +520,14 @@ local function button(parent, text, cb)
     return b
 end
 
-local function chips(parent, items, current, cb)
+local function chips(parent, items, current, cb, perRow)
+    local cols = perRow or 4
     local grid = new("Frame", {
-        Size = UDim2.new(1, 0, 0, math.ceil(#items / 4) * 26),
+        Size = UDim2.new(1, 0, 0, math.ceil(#items / cols) * 26),
         BackgroundTransparency = 1,
     }, parent)
     new("UIGridLayout", {
-        CellSize = UDim2.new(0.25, -3, 0, 22),
+        CellSize = UDim2.new(1 / cols, -3, 0, 22),
         CellPadding = UDim2.new(0, 3, 0, 4),
         SortOrder = Enum.SortOrder.LayoutOrder,
     }, grid)
@@ -820,10 +901,13 @@ track(RunService.RenderStepped:Connect(function(dt)
 end))
 
 --==============================================================
---  БХОП
+--  БХОП И PIXEL SLIDE
 --==============================================================
 local lastJump = 0
 local airJumps = 0
+local slideParams = RaycastParams.new()
+slideParams.IgnoreWater = true
+slideParams.FilterType = Enum.RaycastFilterType.Exclude
 
 local function holdingJump()
     return UIS:IsKeyDown(Enum.KeyCode.Space) or UIS:IsKeyDown(Enum.KeyCode.ButtonA)
@@ -864,18 +948,196 @@ local function doJump(auto)
     end
 end
 
+local function pixelSlide()
+    if not S.pixelSlide then return end
+    local char = lp.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return end
+    if hum.FloorMaterial ~= Enum.Material.Air then return end
+
+    local forward = UIS:IsKeyDown(Enum.KeyCode.W)
+    local left = UIS:IsKeyDown(Enum.KeyCode.A)
+    local right = UIS:IsKeyDown(Enum.KeyCode.D)
+    if not (forward and (left or right)) then return end
+
+    local dir = hum.MoveDirection
+    if dir.Magnitude < 0.1 then return end
+    local root = hum.RootPart
+    if not root then return end
+
+    slideParams.FilterDescendantsInstances = { char }
+    local hit = Workspace:Raycast(root.Position, dir.Unit * 3.2, slideParams)
+    if not hit then return end
+    if math.abs(hit.Normal.Y) > 0.62 then return end
+
+    local v = root.AssemblyLinearVelocity
+    root.AssemblyLinearVelocity = Vector3.new(v.X, 0, v.Z)
+end
+
 track(UIS.JumpRequest:Connect(function() pcall(doJump, false) end))
 track(RunService.Stepped:Connect(function()
-    if not S.bhop then return end
     local char = lp.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     if not hum then return end
-    if hum.FloorMaterial ~= Enum.Material.Air then
+    if S.bhop and hum.FloorMaterial ~= Enum.Material.Air then
         airJumps = 0
         if holdingJump() then pcall(doJump, true) end
     end
+    if S.pixelSlide then pcall(pixelSlide) end
+end))
+track(RunService.RenderStepped:Connect(function()
+    if S.pixelSlide then pcall(pixelSlide) end
 end))
 track(lp.CharacterAdded:Connect(function() airJumps = 0 end))
+
+--==============================================================
+--  НЕБО
+--==============================================================
+local NIGHT = {
+    Bk = "rbxassetid://159454299", Dn = "rbxassetid://159454296",
+    Ft = "rbxassetid://159454293", Lf = "rbxassetid://159454290",
+    Rt = "rbxassetid://159454287", Up = "rbxassetid://159454284",
+}
+
+local CLASSIC = {
+    Bk = "rbxasset://textures/sky/sky512_bk.tex", Dn = "rbxasset://textures/sky/sky512_dn.tex",
+    Ft = "rbxasset://textures/sky/sky512_ft.tex", Lf = "rbxasset://textures/sky/sky512_lf.tex",
+    Rt = "rbxasset://textures/sky/sky512_rt.tex", Up = "rbxasset://textures/sky/sky512_up.tex",
+}
+
+local SKY = {
+    mode = "off", stars = 0, fog = 600, clock = 1,
+    tint = Color3.fromRGB(0, 0, 0), ambient = Color3.fromRGB(0, 0, 0),
+    outdoor = Color3.fromRGB(0, 0, 0), brightness = 1,
+}
+
+local PRESETS = {
+    night    = { set = NIGHT,   clock = 1,    stars = 800,  fog = 700,  tint = Color3.fromRGB(0, 0, 0),        ambient = Color3.fromRGB(12, 12, 20),   outdoor = Color3.fromRGB(20, 20, 32),   brightness = 1.0 },
+    space    = { set = NIGHT,   clock = 0,    stars = 3000, fog = 6000, tint = Color3.fromRGB(0, 0, 0),        ambient = Color3.fromRGB(0, 0, 0),      outdoor = Color3.fromRGB(10, 10, 18),   brightness = 0.4 },
+    sunset   = { set = NIGHT,   clock = 18.2, stars = 150,  fog = 1500, tint = Color3.fromRGB(60, 30, 24),     ambient = Color3.fromRGB(42, 22, 26),   outdoor = Color3.fromRGB(84, 46, 40),   brightness = 1.2 },
+    classic  = { set = CLASSIC, clock = 14,   stars = 0,    fog = 6000, tint = Color3.fromRGB(140, 170, 200),  brightness = 2.0 },
+    overcast = { set = CLASSIC, clock = 13,   stars = 0,    fog = 800,  tint = Color3.fromRGB(118, 122, 130),  ambient = Color3.fromRGB(70, 72, 78),   outdoor = Color3.fromRGB(92, 94, 100),  brightness = 1.4 },
+    dusk     = { set = CLASSIC, clock = 17.6, stars = 60,   fog = 1800, tint = Color3.fromRGB(70, 55, 80),     ambient = Color3.fromRGB(45, 38, 55),   outdoor = Color3.fromRGB(70, 55, 80),   brightness = 1.1 },
+    void     = { set = nil,     clock = 1,    stars = 0,    fog = 600,  tint = Color3.fromRGB(0, 0, 0),        ambient = Color3.fromRGB(0, 0, 0),      outdoor = Color3.fromRGB(0, 0, 0),      brightness = 0.6 },
+    inferno  = { set = nil,     clock = 17,   stars = 0,    fog = 420,  tint = Color3.fromRGB(72, 14, 8),      ambient = Color3.fromRGB(44, 12, 8),    outdoor = Color3.fromRGB(62, 20, 12),   brightness = 1.2 },
+    ice      = { set = nil,     clock = 10,   stars = 0,    fog = 520,  tint = Color3.fromRGB(150, 180, 205),  ambient = Color3.fromRGB(32, 42, 52),   outdoor = Color3.fromRGB(46, 62, 78),   brightness = 1.4 },
+    matrix   = { set = nil,     clock = 2,    stars = 0,    fog = 460,  tint = Color3.fromRGB(6, 42, 12),      ambient = Color3.fromRGB(4, 18, 6),     outdoor = Color3.fromRGB(8, 30, 10),    brightness = 0.9 },
+    blood    = { set = nil,     clock = 0,    stars = 0,    fog = 340,  tint = Color3.fromRGB(58, 6, 6),       ambient = Color3.fromRGB(30, 4, 4),     outdoor = Color3.fromRGB(44, 8, 8),     brightness = 0.8 },
+    ash      = { set = CLASSIC, clock = 11,   stars = 0,    fog = 900,  tint = Color3.fromRGB(92, 92, 96),     ambient = Color3.fromRGB(58, 58, 62),   outdoor = Color3.fromRGB(78, 78, 82),   brightness = 1.1 },
+    neon     = { set = NIGHT,   clock = 0,    stars = 1200, fog = 700,  tint = Color3.fromRGB(48, 6, 60),      ambient = Color3.fromRGB(38, 10, 58),   outdoor = Color3.fromRGB(62, 16, 88),   brightness = 1.6 },
+    eclipse  = { set = NIGHT,   clock = 0,    stars = 2200, fog = 300,  tint = Color3.fromRGB(40, 8, 10),      ambient = Color3.fromRGB(18, 4, 6),     outdoor = Color3.fromRGB(28, 6, 8),     brightness = 0.25 },
+    fog      = { set = CLASSIC, clock = 12,   stars = 0,    fog = 130,  tint = Color3.fromRGB(170, 175, 182),  ambient = Color3.fromRGB(120, 122, 128), outdoor = Color3.fromRGB(150, 152, 158), brightness = 1.6 },
+    radiation= { set = nil,     clock = 12,   stars = 0,    fog = 500,  tint = Color3.fromRGB(56, 92, 10),     ambient = Color3.fromRGB(40, 66, 8),    outdoor = Color3.fromRGB(58, 96, 12),   brightness = 1.3 },
+    storm    = { set = CLASSIC, clock = 15,   stars = 0,    fog = 700,  tint = Color3.fromRGB(30, 36, 54),     ambient = Color3.fromRGB(24, 28, 42),   outdoor = Color3.fromRGB(36, 42, 60),   brightness = 0.7 },
+    sand     = { set = CLASSIC, clock = 16,   stars = 0,    fog = 1000, tint = Color3.fromRGB(196, 168, 112),  ambient = Color3.fromRGB(120, 102, 68), outdoor = Color3.fromRGB(160, 136, 92), brightness = 1.5 },
+    cobalt   = { set = nil,     clock = 3,    stars = 40,   fog = 560,  tint = Color3.fromRGB(8, 26, 76),      ambient = Color3.fromRGB(6, 18, 52),    outdoor = Color3.fromRGB(10, 30, 88),   brightness = 1.0 },
+}
+
+local skySaved, ourSky = nil, nil
+
+local function saveLighting()
+    if skySaved then return end
+    skySaved = {
+        sky = Lighting:FindFirstChildOfClass("Sky"),
+        ambient = Lighting.Ambient,
+        outdoor = Lighting.OutdoorAmbient,
+        brightness = Lighting.Brightness,
+        fogColor = Lighting.FogColor,
+        fogStart = Lighting.FogStart,
+        fogEnd = Lighting.FogEnd,
+        clock = Lighting.ClockTime,
+    }
+end
+
+local function restoreLighting()
+    if ourSky then pcall(function() ourSky:Destroy() end) ourSky = nil end
+    if not skySaved then return end
+    local s = skySaved
+    skySaved = nil
+    if s.sky and s.sky.Parent == nil then pcall(function() s.sky.Parent = Lighting end) end
+    pcall(function()
+        Lighting.Ambient = s.ambient
+        Lighting.OutdoorAmbient = s.outdoor
+        Lighting.Brightness = s.brightness
+        Lighting.FogColor = s.fogColor
+        Lighting.FogStart = s.fogStart
+        Lighting.FogEnd = s.fogEnd
+        Lighting.ClockTime = s.clock
+    end)
+end
+
+local function applySky(mode)
+    local p = PRESETS[mode]
+    SKY.mode = mode
+    if not p then
+        restoreLighting()
+        return
+    end
+
+    saveLighting()
+    if ourSky then pcall(function() ourSky:Destroy() end) ourSky = nil end
+
+    local gameSky = Lighting:FindFirstChildOfClass("Sky")
+    if gameSky and gameSky ~= skySaved.sky then pcall(function() gameSky.Parent = nil end) end
+    if skySaved.sky then pcall(function() skySaved.sky.Parent = nil end) end
+
+    SKY.stars = p.stars
+    SKY.fog = p.fog
+    SKY.clock = p.clock
+    SKY.tint = p.tint
+    SKY.ambient = p.ambient or skySaved.ambient
+    SKY.outdoor = p.outdoor or skySaved.outdoor
+    SKY.brightness = p.brightness or skySaved.brightness
+
+    if p.set then
+        ourSky = Instance.new("Sky")
+        ourSky.SkyboxBk = p.set.Bk
+        ourSky.SkyboxDn = p.set.Dn
+        ourSky.SkyboxFt = p.set.Ft
+        ourSky.SkyboxLf = p.set.Lf
+        ourSky.SkyboxRt = p.set.Rt
+        ourSky.SkyboxUp = p.set.Up
+        ourSky.StarCount = SKY.stars
+        ourSky.CelestialBodiesShown = true
+        ourSky.SunAngularSize = 11
+        ourSky.MoonAngularSize = 14
+        ourSky.Parent = Lighting
+    end
+
+    Lighting.ClockTime = SKY.clock
+    Lighting.Ambient = SKY.ambient
+    Lighting.OutdoorAmbient = SKY.outdoor
+    Lighting.Brightness = SKY.brightness
+    Lighting.FogColor = SKY.tint
+    Lighting.FogStart = 0
+    Lighting.FogEnd = SKY.fog
+end
+
+local function syncSky()
+    local p = PRESETS[SKY.mode]
+    if not p then return end
+    if p.set then
+        if not ourSky or not ourSky.Parent then
+            applySky(SKY.mode)
+            return
+        end
+        if ourSky.StarCount ~= SKY.stars then ourSky.StarCount = SKY.stars end
+    end
+    if Lighting.FogEnd ~= SKY.fog then Lighting.FogEnd = SKY.fog end
+    if Lighting.FogColor ~= SKY.tint then Lighting.FogColor = SKY.tint end
+    if Lighting.Ambient ~= SKY.ambient then Lighting.Ambient = SKY.ambient end
+    if math.abs(Lighting.Brightness - SKY.brightness) > 0.01 then Lighting.Brightness = SKY.brightness end
+    if math.abs(Lighting.ClockTime - SKY.clock) > 0.05 then Lighting.ClockTime = SKY.clock end
+end
+
+track(Lighting.ChildAdded:Connect(function(d)
+    if SKY.mode == "off" then return end
+    if d:IsA("Sky") and d ~= ourSky then
+        task.defer(function()
+            if SKY.mode ~= "off" and d.Parent then pcall(function() d.Parent = nil end) end
+        end)
+    end
+end))
 
 --==============================================================
 --  АВТОБАННИХОП
@@ -1030,6 +1292,7 @@ end))
 --==============================================================
 local visualPage = page("visual"); tabButton("Визуал", "visual")
 local movePage   = page("move");   tabButton("Движение", "move")
+local skyPage    = page("sky");    tabButton("Небо", "sky")
 local watchPage  = page("watch");  tabButton("Автобан", "watch")
 local miscPage   = page("misc");   tabButton("Прочее", "misc")
 
@@ -1111,6 +1374,9 @@ section(movePage, "бхоп")
 toggle(movePage, "Бхоп (держать пробел)", false, function(v) S.bhop = v; airJumps = 0 end)
 slider(movePage, "Прыжков в воздухе", -1, 10, 0, function(v) S.jumpLimit = v; airJumps = 0 end)
 
+section(movePage, "пиксель слайд")
+toggle(movePage, "Pixel Slide (W + A/D у стены)", false, function(v) S.pixelSlide = v end)
+
 section(movePage, "камера")
 toggle(movePage, "Фиксация FOV", false, function(v)
     if v then fovOriginal = (camera and camera.FieldOfView) or 70 end
@@ -1121,6 +1387,40 @@ slider(movePage, "FOV", 40, 120, 90, function(v)
     S.fovValue = v
     applyFov()
 end)
+
+section(skyPage, "пресеты")
+chips(skyPage, {
+    { name = "Выкл", value = "off" },
+    { name = "Ночь", value = "night" },
+    { name = "Космос", value = "space" },
+    { name = "Закат", value = "sunset" },
+    { name = "Сумерки", value = "dusk" },
+    { name = "Классика", value = "classic" },
+    { name = "Пасмурно", value = "overcast" },
+    { name = "Туман", value = "fog" },
+    { name = "Пепел", value = "ash" },
+    { name = "Гроза", value = "storm" },
+    { name = "Песок", value = "sand" },
+    { name = "Затмение", value = "eclipse" },
+    { name = "Неон", value = "neon" },
+    { name = "Кобальт", value = "cobalt" },
+    { name = "Пустота", value = "void" },
+    { name = "Инферно", value = "inferno" },
+    { name = "Лёд", value = "ice" },
+    { name = "Матрица", value = "matrix" },
+    { name = "Радиация", value = "radiation" },
+    { name = "Кровь", value = "blood" },
+}, SKY.mode, function(v) applySky(v) end, 4)
+
+section(skyPage, "настройка")
+slider(skyPage, "Звёзды", 0, 5000, 0, function(v)
+    SKY.stars = v
+    if ourSky then pcall(function() ourSky.StarCount = v end) end
+end)
+slider(skyPage, "Туман (дистанция)", 100, 8000, 600, function(v) SKY.fog = v; syncSky() end)
+slider(skyPage, "Яркость (x10)", 1, 30, 10, function(v) SKY.brightness = v / 10; syncSky() end)
+slider(skyPage, "Время суток", 0, 24, 12, function(v) SKY.clock = v; syncSky() end)
+button(skyPage, "Сбросить небо", function() applySky("off") end)
 
 section(watchPage, "наблюдение")
 toggle(watchPage, "Следить за RAC", true, function(v) S.watchEnabled = v end)
@@ -1151,6 +1451,7 @@ section(miscPage, "безопасность")
 button(miscPage, "PANIC — выключить всё", function()
     S.espEnabled = false
     S.bhop = false
+    S.pixelSlide = false
     S.fovEnabled = false
     applyFov()
     notify("Всё выключено")
@@ -1165,6 +1466,7 @@ end)
 track(RunService.Heartbeat:Connect(function()
     statusLabel.Text = string.format("Детектов: %d\nПоследнее: %s", S.banCount, S.lastReason)
     if S.fovEnabled then pcall(applyFov) end
+    if SKY.mode ~= "off" then pcall(syncSky) end
 end))
 
 track(UIS.InputBegan:Connect(function(input, processed)
@@ -1173,13 +1475,18 @@ track(UIS.InputBegan:Connect(function(input, processed)
 end))
 
 main.Position = UDim2.new(0.5, -243, 0.5, -170)
+glow.Position = UDim2.new(0.5, -251, 0.5, -178)
 TweenService:Create(main, TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
     Position = UDim2.new(0.5, -243, 0.5, -180),
+}):Play()
+TweenService:Create(glow, TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+    Position = UDim2.new(0.5, -251, 0.5, -188),
 }):Play()
 
 pages.visual.Visible = true
 tabs.visual.TextColor3 = Color3.fromRGB(255, 255, 255)
 tabs.visual.BackgroundColor3 = CONFIG.AccentDark
+tabBars.visual.Visible = true
 
 --==============================================================
 --  ВЫГРУЗКА
@@ -1188,6 +1495,7 @@ local function unload()
     for _, c in ipairs(connections) do pcall(function() c:Disconnect() end) end
     for player in pairs(ESP.objects) do unbindPlayer(player) end
     if camera then pcall(function() camera.FieldOfView = fovOriginal end) end
+    pcall(restoreLighting)
     pcall(function() gui:Destroy() end)
     getgenv().SleepScript = nil
 end
