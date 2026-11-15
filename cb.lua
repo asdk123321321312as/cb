@@ -1,9 +1,9 @@
 --!nocheck
 --[[
-    SleepScript • Counter Blox (Rolve)  v1.9
+    SleepScript • Counter Blox (Rolve)  v2.0
     ---------------------------------------------------------------
-    ESP, бхоп, pixel surf, no air spread (2 режима), фиксация FOV,
-    небо с пресетами, автобаннихоп.
+    ESP, бхоп, pixel surf (с окном отпускания), no air spread,
+    фиксация FOV, небо с пресетами, автобаннихоп.
 --]]
 
 local CONFIG = {
@@ -13,7 +13,7 @@ local CONFIG = {
     Keybind     = Enum.KeyCode.RightShift,
     DetectGrace = 20,
     LogOnly     = false,
-    Version     = "1.9",
+    Version     = "2.0",
 }
 
 if getgenv().SleepScript then pcall(function() getgenv().SleepScript.Unload() end) end
@@ -86,7 +86,6 @@ local S = {
     lastReason   = "—",
 }
 
--- флаг «читает наш скрипт», чтобы хуки не подменяли значения нам же
 local selfRead = false
 
 local connections = {}
@@ -109,7 +108,7 @@ local function logFile(line)
 end
 
 --==============================================================
---  ХУМАНОИД (кэш, чтобы хуки не делали вложенных вызовов)
+--  ХУМАНОИД (кэш, хуки не делают вложенных вызовов)
 --==============================================================
 local curHum = nil
 
@@ -960,6 +959,7 @@ end))
 --==============================================================
 local lastJump = 0
 local airJumps = 0
+local surfReleaseUntil = 0
 
 local function holdingJump()
     return UIS:IsKeyDown(Enum.KeyCode.Space) or UIS:IsKeyDown(Enum.KeyCode.ButtonA)
@@ -983,6 +983,7 @@ local function doJump(auto)
         airJumps = 0
     end
     lastJump = now
+    surfReleaseUntil = now + 0.22
 
     pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
 
@@ -1011,10 +1012,11 @@ end))
 
 -- ---- pixel surf ----------------------------------------------
 local SURF = {
-    reach    = 2.6,
-    hang     = 2.0,
+    reach    = 2.0,
+    hang     = 1.2,
     hold     = 1.0,
     friction = 0.85,
+    maxHold  = 0,
 }
 local surfParams = RaycastParams.new()
 surfParams.IgnoreWater = true
@@ -1026,19 +1028,25 @@ local surfDirs = {
 }
 local surfHeights = { 0, 1.2, -1.2 }
 
+local surfAttached = false
+local surfProbe = 0
+local surfFound = false
+local surfHits = 0
+local surfHeld = 0
+
 local function findSeam(char, root)
     surfParams.FilterDescendantsInstances = { char }
 
-    local downLen = 1.2 + SURF.hang
-    local downHit = Workspace:Raycast(root.Position - Vector3.new(0, 2.2, 0),
+    local downLen = 1.0 + SURF.hang
+    local downHit = Workspace:Raycast(root.Position - Vector3.new(0, 2.5, 0),
         Vector3.new(0, -downLen, 0), surfParams)
-    if not downHit or math.abs(downHit.Normal.Y) < 0.45 then return nil end
+    if not downHit or downHit.Normal.Y < 0.6 then return nil end
 
     for _, d in ipairs(surfDirs) do
         for _, h in ipairs(surfHeights) do
             local origin = root.Position + Vector3.new(0, h, 0)
             local hit = Workspace:Raycast(origin, d * SURF.reach, surfParams)
-            if hit and math.abs(hit.Normal.Y) < 0.55 then
+            if hit and math.abs(hit.Normal.Y) < 0.4 then
                 return hit
             end
         end
@@ -1047,27 +1055,80 @@ local function findSeam(char, root)
 end
 
 local function pixelSurf(dt)
-    if not S.pixelSurf then return end
+    local now = os.clock()
+
+    if not S.pixelSurf then
+        surfAttached = false
+        return
+    end
+    -- окно после прыжка: не трогаем вертикаль вообще
+    if now < surfReleaseUntil then
+        surfAttached = false
+        return
+    end
 
     local hum = curHum
     local char = hum and hum.Parent
     local root = hum and hum.RootPart
-    if not char or not root or hum.Health <= 0 or not isAirborne(hum) then return end
+    if not char or not root or hum.Health <= 0 then
+        surfAttached = false
+        return
+    end
+    if not isAirborne(hum) then
+        surfAttached = false
+        surfReleaseUntil = now + 0.12
+        return
+    end
+
+    local v = root.AssemblyLinearVelocity
+    -- идём вверх — не держим
+    if v.Y > 6 then
+        surfAttached = false
+        surfReleaseUntil = now + 0.2
+        return
+    end
 
     local holding = UIS:IsKeyDown(Enum.KeyCode.W) or UIS:IsKeyDown(Enum.KeyCode.A)
         or UIS:IsKeyDown(Enum.KeyCode.S) or UIS:IsKeyDown(Enum.KeyCode.D)
-    if not holding then return end
+    if not holding then
+        surfAttached = false
+        return
+    end
 
-    if not findSeam(char, root) then return end
+    if now - surfProbe > 0.025 then
+        surfProbe = now
+        surfFound = findSeam(char, root) ~= nil
+    end
 
-    local v = root.AssemblyLinearVelocity
-    local horiz = Vector3.new(v.X, 0, v.Z)
+    if not surfFound then
+        surfHits = 0
+        if surfAttached then surfReleaseUntil = now + 0.12 end
+        surfAttached = false
+        return
+    end
 
+    if not surfAttached then
+        surfHits += 1
+        if surfHits < 2 then return end
+        surfAttached = true
+        surfHeld = 0
+    end
+
+    surfHeld += dt
+    if SURF.maxHold > 0 and surfHeld > SURF.maxHold then
+        surfAttached = false
+        surfHits = 0
+        surfReleaseUntil = now + 0.3
+        return
+    end
+
+    -- плавное гашение вместо резкого нуля
+    local k = math.clamp(dt * 12, 0, 1) * math.clamp(SURF.hold, 0, 1)
     local damp = math.clamp(1 - SURF.friction * dt * 2, 0.4, 1)
-    horiz = horiz * damp
+    local horiz = Vector3.new(v.X, 0, v.Z) * damp
 
-    local y = v.Y * (1 - math.clamp(SURF.hold, 0, 1))
-    if math.abs(y) < 0.75 then y = 0 end
+    local y = v.Y * (1 - k)
+    if math.abs(y) < 0.4 then y = 0 end
 
     root.AssemblyLinearVelocity = Vector3.new(horiz.X, y, horiz.Z)
 end
@@ -1078,13 +1139,15 @@ track(RunService.Stepped:Connect(function(_, dt)
     end
 end))
 
-track(lp.CharacterAdded:Connect(function() airJumps = 0 end))
+track(lp.CharacterAdded:Connect(function()
+    airJumps = 0
+    surfAttached = false
+    surfReleaseUntil = 0
+end))
 
 --==============================================================
 --  NO AIR SPREAD
 --==============================================================
--- в хуках НИ ОДНОГО вложенного вызова: только сравнение с кэшем
--- и вызов оригинала, иначе сбивается текущий метод namecall
 local origIndex, origNamecall = nil, nil
 local hookedIndex, hookedNamecall = false, false
 
@@ -1144,7 +1207,6 @@ local function setAirSpread(on)
     end
 end
 
--- запись свойства держим на 20 Гц: чаще — начинает спорить с репликацией
 local spreadClock = 0
 track(RunService.RenderStepped:Connect(function(dt)
     if not S.noAirSpread then return end
@@ -1558,8 +1620,9 @@ section(movePage, "pixel surf")
 toggle(movePage, "Pixel Surf (держаться за стык)", false, function(v) S.pixelSurf = v end)
 slider(movePage, "Удержание (x100)", 0, 100, 100, function(v) SURF.hold = v / 100 end)
 slider(movePage, "Трение (x100)", 0, 100, 85, function(v) SURF.friction = v / 100 end)
-slider(movePage, "Радиус поиска (x10)", 12, 45, 26, function(v) SURF.reach = v / 10 end)
-slider(movePage, "Допуск по высоте (x10)", 5, 40, 20, function(v) SURF.hang = v / 10 end)
+slider(movePage, "Радиус поиска (x10)", 12, 40, 20, function(v) SURF.reach = v / 10 end)
+slider(movePage, "Допуск по высоте (x10)", 5, 30, 12, function(v) SURF.hang = v / 10 end)
+slider(movePage, "Макс. удержание (x0.1с, 0 = без)", 0, 100, 0, function(v) SURF.maxHold = v / 10 end)
 
 section(movePage, "разброс")
 toggle(movePage, "Убрать разброс в полёте", false, function(v) setAirSpread(v) end)
