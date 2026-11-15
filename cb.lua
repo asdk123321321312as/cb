@@ -1,8 +1,8 @@
 --!nocheck
 --[[
-    SleepScript • Counter Blox (Rolve)  v1.8
+    SleepScript • Counter Blox (Rolve)  v1.9
     ---------------------------------------------------------------
-    ESP, бхоп, pixel surf, no air spread, фиксация FOV,
+    ESP, бхоп, pixel surf, no air spread (2 режима), фиксация FOV,
     небо с пресетами, автобаннихоп.
 --]]
 
@@ -13,7 +13,7 @@ local CONFIG = {
     Keybind     = Enum.KeyCode.RightShift,
     DetectGrace = 20,
     LogOnly     = false,
-    Version     = "1.8",
+    Version     = "1.9",
 }
 
 if getgenv().SleepScript then pcall(function() getgenv().SleepScript.Unload() end) end
@@ -73,6 +73,7 @@ local S = {
     bhop         = false,
     jumpLimit    = 0,
     noAirSpread  = false,
+    spreadHard   = false,
     pixelSurf    = false,
 
     fovEnabled   = false,
@@ -105,6 +106,60 @@ local function logFile(line)
         local prev = isfile and isfile("SleepScript.log") and readfile("SleepScript.log") or ""
         writefile("SleepScript.log", prev .. os.date("[%H:%M:%S] ") .. line .. "\n")
     end)
+end
+
+--==============================================================
+--  ХУМАНОИД (кэш, чтобы хуки не делали вложенных вызовов)
+--==============================================================
+local curHum = nil
+
+local function refreshHum()
+    local ok, char = pcall(function() return lp.Character end)
+    if ok and char then
+        curHum = char:FindFirstChildOfClass("Humanoid") or nil
+    else
+        curHum = nil
+    end
+end
+refreshHum()
+
+track(lp.CharacterAdded:Connect(function()
+    curHum = nil
+    task.delay(0.2, refreshHum)
+end))
+track(lp.CharacterRemoving:Connect(function() curHum = nil end))
+
+local function realState(hum)
+    if not hum then return nil end
+    selfRead = true
+    local ok, st = pcall(function() return hum:GetState() end)
+    selfRead = false
+    if ok then return st end
+    return nil
+end
+
+local function realFloor(hum)
+    if not hum then return nil end
+    selfRead = true
+    local ok, mat = pcall(function() return hum.FloorMaterial end)
+    selfRead = false
+    if ok then return mat end
+    return nil
+end
+
+local function isAirborne(hum)
+    if not hum or hum.Health <= 0 then return false end
+    local st = realState(hum)
+    if st == Enum.HumanoidStateType.Freefall or st == Enum.HumanoidStateType.Jumping then
+        return true
+    end
+    if S.spreadHard and st == Enum.HumanoidStateType.Running then
+        local root = hum.RootPart
+        if root and math.abs(root.AssemblyLinearVelocity.Y) > 2.5 then
+            return true
+        end
+    end
+    return realFloor(hum) == Enum.Material.Air
 end
 
 --==============================================================
@@ -901,42 +956,10 @@ track(RunService.RenderStepped:Connect(function(dt)
 end))
 
 --==============================================================
---  ДВИЖЕНИЕ: БХОП + PIXEL SURF
+--  БХОП
 --==============================================================
 local lastJump = 0
 local airJumps = 0
-
-local function myHum()
-    local char = lp.Character
-    return char and char:FindFirstChildOfClass("Humanoid")
-end
-
-local function realState(hum)
-    if not hum then return nil end
-    selfRead = true
-    local ok, st = pcall(function() return hum:GetState() end)
-    selfRead = false
-    if ok then return st end
-    return nil
-end
-
-local function realFloor(hum)
-    if not hum then return nil end
-    selfRead = true
-    local ok, mat = pcall(function() return hum.FloorMaterial end)
-    selfRead = false
-    if ok then return mat end
-    return nil
-end
-
-local function isAirborne(hum)
-    if not hum or hum.Health <= 0 then return false end
-    local st = realState(hum)
-    if st == Enum.HumanoidStateType.Freefall or st == Enum.HumanoidStateType.Jumping then
-        return true
-    end
-    return realFloor(hum) == Enum.Material.Air
-end
 
 local function holdingJump()
     return UIS:IsKeyDown(Enum.KeyCode.Space) or UIS:IsKeyDown(Enum.KeyCode.ButtonA)
@@ -948,8 +971,7 @@ local function doJump(auto)
     if now - lastJump < 0.04 then return end
     if auto and now - lastJump < 0.12 then return end
 
-    local char = lp.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local hum = curHum
     if not hum or hum.Health <= 0 then return end
     local root = hum.RootPart
     if not root or root.Anchored then return end
@@ -979,7 +1001,7 @@ end
 track(UIS.JumpRequest:Connect(function() pcall(doJump, false) end))
 
 track(RunService.Stepped:Connect(function()
-    local hum = myHum()
+    local hum = curHum
     if not hum or hum.Health <= 0 then return end
     if S.bhop and not isAirborne(hum) then
         airJumps = 0
@@ -988,14 +1010,11 @@ track(RunService.Stepped:Connect(function()
 end))
 
 -- ---- pixel surf ----------------------------------------------
--- ищем стык: вертикальная плоскость рядом + поверхность под ногами.
--- на стыке гасим вертикаль и подтираем горизонталь трением,
--- персонаж висит в углу и медленно сползает вдоль шва.
 local SURF = {
-    reach   = 2.6,   -- радиус поиска стены
-    hang    = 2.0,   -- допуск по высоте до поверхности снизу
-    hold    = 1.0,   -- доля гасимой вертикали (0..1)
-    friction= 0.85,  -- трение по горизонтали (0..1)
+    reach    = 2.6,
+    hang     = 2.0,
+    hold     = 1.0,
+    friction = 0.85,
 }
 local surfParams = RaycastParams.new()
 surfParams.IgnoreWater = true
@@ -1030,10 +1049,10 @@ end
 local function pixelSurf(dt)
     if not S.pixelSurf then return end
 
-    local char = lp.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local hum = curHum
+    local char = hum and hum.Parent
     local root = hum and hum.RootPart
-    if not root or hum.Health <= 0 or not isAirborne(hum) then return end
+    if not char or not root or hum.Health <= 0 or not isAirborne(hum) then return end
 
     local holding = UIS:IsKeyDown(Enum.KeyCode.W) or UIS:IsKeyDown(Enum.KeyCode.A)
         or UIS:IsKeyDown(Enum.KeyCode.S) or UIS:IsKeyDown(Enum.KeyCode.D)
@@ -1064,6 +1083,8 @@ track(lp.CharacterAdded:Connect(function() airJumps = 0 end))
 --==============================================================
 --  NO AIR SPREAD
 --==============================================================
+-- в хуках НИ ОДНОГО вложенного вызова: только сравнение с кэшем
+-- и вызов оригинала, иначе сбивается текущий метод namecall
 local origIndex, origNamecall = nil, nil
 local hookedIndex, hookedNamecall = false, false
 
@@ -1071,8 +1092,7 @@ if typeof(hookmetamethod) == "function" then
     local ok = pcall(function()
         origIndex = hookmetamethod(game, "__index", function(self, key)
             if key == "FloorMaterial" and S.noAirSpread and not selfRead then
-                local hum = myHum()
-                if hum and rawequal(self, hum) then
+                if rawequal(self, curHum) then
                     local real = origIndex(self, key)
                     if real == Enum.Material.Air then
                         return Enum.Material.Plastic
@@ -1089,9 +1109,9 @@ end
 if typeof(hookmetamethod) == "function" and typeof(getnamecallmethod) == "function" then
     local ok = pcall(function()
         origNamecall = hookmetamethod(game, "__namecall", function(self, ...)
-            if S.noAirSpread and not selfRead and getnamecallmethod() == "GetState" then
-                local hum = myHum()
-                if hum and rawequal(self, hum) then
+            local method = getnamecallmethod()
+            if method == "GetState" and S.noAirSpread and not selfRead then
+                if rawequal(self, curHum) then
                     local st = origNamecall(self, ...)
                     if st == Enum.HumanoidStateType.Freefall or st == Enum.HumanoidStateType.Jumping then
                         return Enum.HumanoidStateType.Running
@@ -1105,21 +1125,48 @@ if typeof(hookmetamethod) == "function" and typeof(getnamecallmethod) == "functi
     hookedNamecall = ok
 end
 
-local function setAirSpread(on)
-    S.noAirSpread = on
-    local hum = myHum()
+local function restoreSpreadState()
+    local hum = curHum
     if hum then
-        pcall(function() hum.FloorMaterial = on and Enum.Material.Plastic or Enum.Material.Air end)
+        pcall(function() hum.FloorMaterial = Enum.Material.Air end)
     end
 end
 
-track(RunService.RenderStepped:Connect(function()
+local function setAirSpread(on)
+    S.noAirSpread = on
+    if on then
+        refreshHum()
+        if not (hookedIndex or hookedNamecall) then
+            notify("Хуки недоступны — только запись свойства")
+        end
+    else
+        restoreSpreadState()
+    end
+end
+
+-- запись свойства держим на 20 Гц: чаще — начинает спорить с репликацией
+local spreadClock = 0
+track(RunService.RenderStepped:Connect(function(dt)
     if not S.noAirSpread then return end
-    local hum = myHum()
+    spreadClock += dt
+    if spreadClock < 0.05 then return end
+    spreadClock = 0
+
+    local hum = curHum
+    if not hum or hum.Parent == nil then
+        refreshHum()
+        hum = curHum
+    end
     if not hum or hum.Health <= 0 then return end
+
     local st = realState(hum)
     if st == Enum.HumanoidStateType.Freefall or st == Enum.HumanoidStateType.Jumping then
-        pcall(function() hum.FloorMaterial = Enum.Material.Plastic end)
+        if realFloor(hum) == Enum.Material.Air then
+            pcall(function() hum.FloorMaterial = Enum.Material.Plastic end)
+        end
+        if S.spreadHard then
+            pcall(function() hum:ChangeState(Enum.HumanoidStateType.Running) end)
+        end
     end
 end))
 
@@ -1516,6 +1563,11 @@ slider(movePage, "Допуск по высоте (x10)", 5, 40, 20, function(v) 
 
 section(movePage, "разброс")
 toggle(movePage, "Убрать разброс в полёте", false, function(v) setAirSpread(v) end)
+toggle(movePage, "Жёсткий режим (форс состояния)", false, function(v) S.spreadHard = v end)
+button(movePage, "Сбросить состояние разброса", function()
+    restoreSpreadState()
+    notify("Состояние разброса сброшено")
+end)
 
 section(movePage, "камера")
 toggle(movePage, "Фиксация FOV", false, function(v)
@@ -1637,8 +1689,7 @@ local function unload()
     for player in pairs(ESP.objects) do unbindPlayer(player) end
     if hookedIndex and origIndex then pcall(function() hookmetamethod(game, "__index", origIndex) end) end
     if hookedNamecall and origNamecall then pcall(function() hookmetamethod(game, "__namecall", origNamecall) end) end
-    local hum = myHum()
-    if hum then pcall(function() hum.FloorMaterial = Enum.Material.Air end) end
+    restoreSpreadState()
     if camera then pcall(function() camera.FieldOfView = fovOriginal end) end
     pcall(restoreLighting)
     pcall(function() gui:Destroy() end)
@@ -1648,7 +1699,7 @@ end
 getgenv().SleepScript = { Unload = unload, Settings = S }
 notify("SleepScript загружен. RightShift — меню")
 if not (hookedIndex or hookedNamecall) then
-    notify("Хуки недоступны — работает только запись свойства")
+    notify("Хуки недоступны — только запись свойства")
 end
 logFile("loaded on " .. game.GameId .. " / " .. game.JobId)
 
