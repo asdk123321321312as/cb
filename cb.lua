@@ -1,9 +1,10 @@
 --!nocheck
 --[[
-    SleepScript • Counter Blox (Rolve)  v2.1
+    SleepScript • Counter Blox (Rolve)  v2.2
     ---------------------------------------------------------------
-    ESP, бхоп, pixel surf, no air spread, фиксация FOV,
+    ESP, бхоп, no air spread, фиксация FOV,
     небо с пресетами, автобаннихоп.
+    v2.2: pixel surf убран, добавлен стелс-режим.
 --]]
 
 local CONFIG = {
@@ -13,7 +14,7 @@ local CONFIG = {
     Keybind     = Enum.KeyCode.RightShift,
     DetectGrace = 20,
     LogOnly     = false,
-    Version     = "2.1",
+    Version     = "2.2",
 }
 
 if getgenv().SleepScript then pcall(function() getgenv().SleepScript.Unload() end) end
@@ -71,16 +72,18 @@ local S = {
     maxDist      = 600,
 
     bhop         = false,
+    bhopAggro    = false,
     jumpLimit    = 0,
     noAirSpread  = false,
     spreadHard   = false,
-    pixelSurf    = false,
+    spreadForce  = true,
 
     fovEnabled   = false,
     fovValue     = 90,
 
     watchEnabled = true,
     autoRejoin   = true,
+    onlySelf     = true,
     rejoinDelay  = 1.5,
     banCount     = 0,
     lastReason   = "—",
@@ -273,7 +276,7 @@ new("UIGradient", {
 }, title)
 
 new("TextLabel", {
-    Text = "counter blox  •  esp  •  bhop  •  surf  •  no spread  •  sky  •  rac watch",
+    Text = "counter blox  •  esp  •  bhop  •  no spread  •  sky  •  rac watch",
     Font = Enum.Font.Gotham,
     TextSize = 11,
     TextColor3 = Color3.fromRGB(150, 150, 175),
@@ -959,7 +962,6 @@ end))
 --==============================================================
 local lastJump = 0
 local airJumps = 0
-local surfReleaseUntil = 0
 
 local function holdingJump()
     return UIS:IsKeyDown(Enum.KeyCode.Space) or UIS:IsKeyDown(Enum.KeyCode.ButtonA)
@@ -983,19 +985,21 @@ local function doJump(auto)
         airJumps = 0
     end
     lastJump = now
-    surfReleaseUntil = now + 0.16
 
-    pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
-
-    local jp = hum.JumpPower
-    if not hum.UseJumpPower then
-        jp = math.sqrt(2 * Workspace.Gravity * hum.JumpHeight)
-    end
-    if jp and jp > 0 then
-        local v = root.AssemblyLinearVelocity
-        if v.Y < jp * 0.95 then
-            root.AssemblyLinearVelocity = Vector3.new(v.X, jp, v.Z)
+    if S.bhopAggro then
+        pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+        local jp = hum.JumpPower
+        if not hum.UseJumpPower then
+            jp = math.sqrt(2 * Workspace.Gravity * hum.JumpHeight)
         end
+        if jp and jp > 0 then
+            local v = root.AssemblyLinearVelocity
+            if v.Y < jp * 0.95 then
+                root.AssemblyLinearVelocity = Vector3.new(v.X, jp, v.Z)
+            end
+        end
+    else
+        pcall(function() hum.Jump = true end)
     end
 end
 
@@ -1010,142 +1014,8 @@ track(RunService.Stepped:Connect(function()
     end
 end))
 
--- ---- pixel surf ----------------------------------------------
-local SURF = {
-    reach    = 2.6,
-    hang     = 2.4,
-    hold     = 1.0,
-    friction = 0.85,
-    maxHold  = 0,
-}
-local surfParams = RaycastParams.new()
-surfParams.IgnoreWater = true
-surfParams.FilterType = Enum.RaycastFilterType.Exclude
-
-local surfDirs = {
-    Vector3.new(1, 0, 0), Vector3.new(-1, 0, 0),
-    Vector3.new(0, 0, 1), Vector3.new(0, 0, -1),
-}
-local surfHeights = { 0, 1.2, -1.2 }
-
-local surfAttached = false
-local surfProbe = 0
-local surfFound = false
-local surfHits = 0
-local surfHeld = 0
-
-local function findSeam(char, root)
-    surfParams.FilterDescendantsInstances = { char }
-
-    local downLen = 1.0 + SURF.hang
-    local downHit = Workspace:Raycast(root.Position - Vector3.new(0, 2.5, 0),
-        Vector3.new(0, -downLen, 0), surfParams)
-    if not downHit or downHit.Normal.Y < 0.45 then return nil end
-
-    for _, d in ipairs(surfDirs) do
-        for _, h in ipairs(surfHeights) do
-            local origin = root.Position + Vector3.new(0, h, 0)
-            local hit = Workspace:Raycast(origin, d * SURF.reach, surfParams)
-            if hit and math.abs(hit.Normal.Y) < 0.5 then
-                return hit
-            end
-        end
-    end
-    return nil
-end
-
-local function pixelSurf(dt)
-    local now = os.clock()
-
-    if not S.pixelSurf then
-        surfAttached = false
-        return
-    end
-
-    local hum = curHum
-    local char = hum and hum.Parent
-    local root = hum and hum.RootPart
-    if not char or not root or hum.Health <= 0 then
-        surfAttached = false
-        return
-    end
-
-    local v = root.AssemblyLinearVelocity
-
-    -- старт прыжка: отпускаем и не трогаем вертикаль
-    if v.Y > 9 then
-        surfAttached = false
-        surfHits = 0
-        surfReleaseUntil = now + 0.16
-        return
-    end
-    if now < surfReleaseUntil then
-        surfAttached = false
-        return
-    end
-
-    -- пока держимся, состояние «в воздухе» не перепроверяем:
-    -- гашение вертикали само переводит хуманоид в Running
-    if not surfAttached and not isAirborne(hum) then
-        return
-    end
-
-    local holding = UIS:IsKeyDown(Enum.KeyCode.W) or UIS:IsKeyDown(Enum.KeyCode.A)
-        or UIS:IsKeyDown(Enum.KeyCode.S) or UIS:IsKeyDown(Enum.KeyCode.D)
-    if not holding then
-        surfAttached = false
-        surfHits = 0
-        return
-    end
-
-    if now - surfProbe > 0.025 then
-        surfProbe = now
-        surfFound = findSeam(char, root) ~= nil
-    end
-
-    if not surfFound then
-        surfHits = 0
-        if surfAttached then surfReleaseUntil = now + 0.1 end
-        surfAttached = false
-        return
-    end
-
-    if not surfAttached then
-        surfHits += 1
-        if surfHits < 2 then return end
-        surfAttached = true
-        surfHeld = 0
-    end
-
-    surfHeld += dt
-    if SURF.maxHold > 0 and surfHeld > SURF.maxHold then
-        surfAttached = false
-        surfHits = 0
-        surfReleaseUntil = now + 0.25
-        return
-    end
-
-    local k = math.clamp(dt * 14, 0, 1) * math.clamp(SURF.hold, 0, 1)
-    local damp = math.clamp(1 - SURF.friction * dt * 2, 0.4, 1)
-    local horiz = Vector3.new(v.X, 0, v.Z) * damp
-
-    local y = v.Y * (1 - k)
-    if math.abs(y) < 0.4 then y = 0 end
-
-    root.AssemblyLinearVelocity = Vector3.new(horiz.X, y, horiz.Z)
-end
-
-track(RunService.Stepped:Connect(function(_, dt)
-    if S.pixelSurf then
-        pcall(pixelSurf, math.clamp(dt, 0, 0.05))
-    end
-end))
-
 track(lp.CharacterAdded:Connect(function()
     airJumps = 0
-    surfAttached = false
-    surfHits = 0
-    surfReleaseUntil = 0
 end))
 
 --==============================================================
@@ -1229,7 +1099,7 @@ track(RunService.RenderStepped:Connect(function(dt)
         if realFloor(hum) == Enum.Material.Air then
             pcall(function() hum.FloorMaterial = Enum.Material.Plastic end)
         end
-        if S.spreadHard then
+        if S.spreadForce then
             pcall(function() hum:ChangeState(Enum.HumanoidStateType.Running) end)
         end
     end
@@ -1442,7 +1312,7 @@ local function rejoin()
     task.delay(8, function() hopping = false end)
 end
 
-local function onBan(reason, hard, force)
+local function onBan(reason, hard, force, mine)
     local now = os.clock()
     if not force and (now - loadTime) < CONFIG.DetectGrace then return end
     if now < banCooldown then return end
@@ -1458,15 +1328,10 @@ local function onBan(reason, hard, force)
     banCooldown = now + 6
     S.banCount += 1
     S.lastReason = reason
-    logFile(string.format("DETECT #%d: %s", S.banCount, reason))
-    notify("RAC: " .. reason .. (CONFIG.LogOnly and " (лог)" or " — хоп"))
+    logFile(string.format("DETECT #%d (%s): %s", S.banCount, mine and "self" or "other", reason))
+    notify("RAC: " .. reason .. (CONFIG.LogOnly and " (лог)" or ""))
 
-    if S.banCount >= 3 and not S.paranoid then
-        S.paranoid = true
-        notify("3 детекта → паранойя включена")
-    end
-
-    if S.autoRejoin and not CONFIG.LogOnly then
+    if S.autoRejoin and not CONFIG.LogOnly and (mine or force or not S.onlySelf) then
         task.delay(S.rejoinDelay, rejoin)
     end
 end
@@ -1501,7 +1366,7 @@ local function scanGui(root)
                 local pat, hard = matchText(d.Text)
                 if pat then
                     banSeen[key] = true
-                    onBan(pat, hard)
+                    onBan(pat, hard, false, true)
                 end
             end
         end
@@ -1513,8 +1378,11 @@ task.spawn(function()
     if ev and ev:FindFirstChild("OnMessageDoneFiltering") then
         track(ev.OnMessageDoneFiltering.OnClientEvent:Connect(function(msg)
             if not S.watchEnabled or type(msg) ~= "table" then return end
-            local pat, hard = matchText(tostring(msg.Message or ""))
-            if pat then onBan(pat, hard) end
+            local txt = tostring(msg.Message or "")
+            local pat, hard = matchText(txt)
+            if not pat then return end
+            local mine = string.find(string.lower(txt), string.lower(lp.Name), 1, true) ~= nil
+            onBan(pat, hard, false, mine)
         end))
     end
 end)
@@ -1529,7 +1397,7 @@ task.spawn(function()
 end)
 
 track(lp.AncestryChanged:Connect(function(_, parent)
-    if not parent and S.watchEnabled then onBan("localplayer removed", true, true) end
+    if not parent and S.watchEnabled then onBan("localplayer removed", true, true, true) end
 end))
 
 --==============================================================
@@ -1616,27 +1484,21 @@ section(visualPage, "цвет невидимых")
 chips(visualPage, palItems, S.colorHidden, function(v) S.colorHidden = v end)
 
 section(movePage, "бхоп")
-toggle(movePage, "Бхоп (держать пробел)", false, function(v) S.bhop = v; airJumps = 0 end)
+local bhopToggle = toggle(movePage, "Бхоп (держать пробел)", false, function(v) S.bhop = v; airJumps = 0 end)
+local bhopAggroToggle = toggle(movePage, "Агрессивный бхоп (форс + импульс)", false, function(v) S.bhopAggro = v end)
 slider(movePage, "Прыжков в воздухе", -1, 10, 0, function(v) S.jumpLimit = v; airJumps = 0 end)
-
-section(movePage, "pixel surf")
-toggle(movePage, "Pixel Surf (держаться за стык)", false, function(v) S.pixelSurf = v end)
-slider(movePage, "Удержание (x100)", 0, 100, 100, function(v) SURF.hold = v / 100 end)
-slider(movePage, "Трение (x100)", 0, 100, 85, function(v) SURF.friction = v / 100 end)
-slider(movePage, "Радиус поиска (x10)", 12, 40, 26, function(v) SURF.reach = v / 10 end)
-slider(movePage, "Допуск по высоте (x10)", 5, 60, 24, function(v) SURF.hang = v / 10 end)
-slider(movePage, "Макс. удержание (x0.1с, 0 = без)", 0, 100, 0, function(v) SURF.maxHold = v / 10 end)
 
 section(movePage, "разброс")
 toggle(movePage, "Убрать разброс в полёте", false, function(v) setAirSpread(v) end)
-toggle(movePage, "Жёсткий режим (форс состояния)", false, function(v) S.spreadHard = v end)
+local spreadForceToggle = toggle(movePage, "Форсить Running (сильнее, заметнее)", true, function(v) S.spreadForce = v end)
+toggle(movePage, "Жёсткий режим определения (по скорости)", false, function(v) S.spreadHard = v end)
 button(movePage, "Сбросить состояние разброса", function()
     restoreSpreadState()
     notify("Состояние разброса сброшено")
 end)
 
 section(movePage, "камера")
-toggle(movePage, "Фиксация FOV", false, function(v)
+local fovToggle = toggle(movePage, "Фиксация FOV", false, function(v)
     if v and camera then fovOriginal = camera.FieldOfView end
     S.fovEnabled = v
     applyFov()
@@ -1682,6 +1544,7 @@ button(skyPage, "Сбросить небо", function() applySky("off") end)
 
 section(watchPage, "наблюдение")
 toggle(watchPage, "Следить за RAC", true, function(v) S.watchEnabled = v end)
+toggle(watchPage, "Реагировать только на свой бан", true, function(v) S.onlySelf = v end)
 toggle(watchPage, "Автопереподключение", true, function(v) S.autoRejoin = v end)
 toggle(watchPage, "Только логировать", false, function(v) CONFIG.LogOnly = v end)
 slider(watchPage, "Задержка хопа (0.1с)", 1, 30, 15, function(v) S.rejoinDelay = v / 10 end)
@@ -1698,7 +1561,7 @@ local statusLabel = new("TextLabel", {
 }, watchPage)
 
 section(watchPage, "действия")
-button(watchPage, "Проверить детект вручную", function() onBan("manual test", true, true) end)
+button(watchPage, "Проверить детект вручную", function() onBan("manual test", true, true, true) end)
 button(watchPage, "Хопнуть сейчас", function() notify("Хоп…"); rejoin() end)
 
 section(miscPage, "производительность")
@@ -1706,10 +1569,20 @@ toggle(miscPage, "Паранойя (тик 10 Гц)", false, function(v) S.paran
 toggle(miscPage, "Адаптивный бюджет", true, function(v) S.adaptive = v end)
 
 section(miscPage, "безопасность")
+button(miscPage, "СТЕЛС-ПРОФИЛЬ — минимум следов", function()
+    bhopToggle.set(false)
+    bhopAggroToggle.set(false)
+    spreadForceToggle.set(false)
+    fovToggle.set(false)
+    S.fovEnabled = false
+    applyFov()
+    S.skeleton = false
+    S.offscreen = false
+    notify("Стелс: только ESP и лёгкий no-spread")
+end)
 button(miscPage, "PANIC — выключить всё", function()
     S.espEnabled = false
     S.bhop = false
-    S.pixelSurf = false
     setAirSpread(false)
     S.fovEnabled = false
     applyFov()
