@@ -1,8 +1,9 @@
+
 --!nocheck
 --[[
-    SleepScript • Counter Blox (Rolve)  v1.6
+    SleepScript • Counter Blox (Rolve)
     ---------------------------------------------------------------
-    ESP, бхоп, no air spread, фиксация FOV, третье лицо по бинду,
+    ESP с кастомизацией, бхоп, pixel slide, фиксация FOV,
     небо с пресетами, автобаннихоп.
 --]]
 
@@ -13,7 +14,7 @@ local CONFIG = {
     Keybind     = Enum.KeyCode.RightShift,
     DetectGrace = 20,
     LogOnly     = false,
-    Version     = "1.6",
+    Version     = "1.3",
 }
 
 if getgenv().SleepScript then pcall(function() getgenv().SleepScript.Unload() end) end
@@ -72,14 +73,10 @@ local S = {
 
     bhop         = false,
     jumpLimit    = 0,
-    noAirSpread  = false,
+    pixelSlide   = false,
 
     fovEnabled   = false,
     fovValue     = 90,
-
-    thirdPerson  = false,
-    tpDistance   = 12,
-    tpBind       = Enum.KeyCode.V,
 
     watchEnabled = true,
     autoRejoin   = true,
@@ -87,9 +84,6 @@ local S = {
     banCount     = 0,
     lastReason   = "—",
 }
-
--- флаг «читает наш скрипт», чтобы хуки не подменяли значения нам же
-local selfRead = false
 
 local connections = {}
 local function track(c) table.insert(connections, c) return c end
@@ -111,66 +105,41 @@ local function logFile(line)
 end
 
 --==============================================================
---  КАМЕРА / FOV / ТРЕТЬЕ ЛИЦО
+--  КАМЕРА И ФИКСАЦИЯ FOV
 --==============================================================
 local camera = Workspace.CurrentCamera
 local fovOriginal = camera and camera.FieldOfView or 70
-local savedCamMode = lp.CameraMode
-local savedZoomMin = lp.CameraMinZoomDistance
-local savedZoomMax = lp.CameraMaxZoomDistance
+local fovWriting = false
 
 local function applyFov()
     local cam = camera or Workspace.CurrentCamera
     if not cam then return end
-    if S.fovEnabled then
-        pcall(function() cam.FieldOfView = S.fovValue end)
-    else
-        pcall(function() cam.FieldOfView = fovOriginal end)
+    local target = S.fovEnabled and S.fovValue or fovOriginal
+    if math.abs(cam.FieldOfView - target) > 0.2 then
+        fovWriting = true
+        pcall(function() cam.FieldOfView = target end)
+        fovWriting = false
     end
 end
 
-local function applyCameraMode()
-    pcall(function()
-        if S.thirdPerson then
-            lp.CameraMode = Enum.CameraMode.Classic
-            lp.CameraMinZoomDistance = 4
-            lp.CameraMaxZoomDistance = math.clamp(S.tpDistance, 6, 40)
-        else
-            lp.CameraMode = Enum.CameraMode.LockFirstPerson
-            lp.CameraMinZoomDistance = 0.5
-            lp.CameraMaxZoomDistance = 0.5
-        end
-    end)
-end
-
--- держим и FOV, и режим камеры прямо перед кадром:
--- так перезапись со стороны игры не успевает сработать
-track(RunService.RenderStepped:Connect(function()
-    local cam = camera or Workspace.CurrentCamera
+local function bindCam(cam)
     if not cam then return end
-
-    if S.fovEnabled then
-        if math.abs(cam.FieldOfView - S.fovValue) > 0.4 then
-            pcall(function() cam.FieldOfView = S.fovValue end)
+    track(cam:GetPropertyChangedSignal("FieldOfView"):Connect(function()
+        if fovWriting then return end
+        local target = S.fovEnabled and S.fovValue or fovOriginal
+        if math.abs(cam.FieldOfView - target) > 0.2 then
+            fovWriting = true
+            pcall(function() cam.FieldOfView = target end)
+            fovWriting = false
         end
-    end
+    end))
+end
 
-    if S.thirdPerson then
-        pcall(function()
-            if lp.CameraMode ~= Enum.CameraMode.Classic then
-                lp.CameraMode = Enum.CameraMode.Classic
-            end
-            if math.abs(lp.CameraMaxZoomDistance - math.clamp(S.tpDistance, 6, 40)) > 0.1 then
-                lp.CameraMinZoomDistance = 4
-                lp.CameraMaxZoomDistance = math.clamp(S.tpDistance, 6, 40)
-            end
-        end)
-    end
-end))
-
+bindCam(camera)
 track(Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
     if Workspace.CurrentCamera then
         camera = Workspace.CurrentCamera
+        bindCam(camera)
         applyFov()
     end
 end))
@@ -214,11 +183,6 @@ local main = new("Frame", {
 new("UICorner", { CornerRadius = UDim.new(0, 12) }, main)
 new("UIStroke", { Color = CONFIG.Accent, Thickness = 1, Transparency = 0.5 }, main)
 
--- подложка живёт только вместе с окном
-track(main:GetPropertyChangedSignal("Visible"):Connect(function()
-    glow.Visible = main.Visible
-end))
-
 local header = new("Frame", {
     Size = UDim2.new(1, 0, 0, 58),
     BackgroundColor3 = Color3.fromRGB(19, 17, 32),
@@ -256,13 +220,13 @@ new("UIGradient", {
 }, title)
 
 new("TextLabel", {
-    Text = "counter blox  •  esp  •  bhop  •  no spread  •  3rd person  •  sky  •  rac watch",
+    Text = "counter blox  •  esp  •  bhop  •  slide  •  sky  •  rac watch",
     Font = Enum.Font.Gotham,
     TextSize = 11,
     TextColor3 = Color3.fromRGB(150, 150, 175),
     BackgroundTransparency = 1,
     Position = UDim2.fromOffset(18, 33),
-    Size = UDim2.fromOffset(380, 14),
+    Size = UDim2.fromOffset(350, 14),
     TextXAlignment = Enum.TextXAlignment.Left,
     ZIndex = 3,
 }, header)
@@ -938,42 +902,13 @@ track(RunService.RenderStepped:Connect(function(dt)
 end))
 
 --==============================================================
---  БХОП
+--  БХОП И PIXEL SLIDE
 --==============================================================
 local lastJump = 0
 local airJumps = 0
-
-local function myHum()
-    local char = lp.Character
-    return char and char:FindFirstChildOfClass("Humanoid")
-end
-
-local function realState(hum)
-    if not hum then return nil end
-    selfRead = true
-    local ok, st = pcall(function() return hum:GetState() end)
-    selfRead = false
-    if ok then return st end
-    return nil
-end
-
-local function realFloor(hum)
-    if not hum then return nil end
-    selfRead = true
-    local ok, mat = pcall(function() return hum.FloorMaterial end)
-    selfRead = false
-    if ok then return mat end
-    return nil
-end
-
-local function isAirborne(hum)
-    if not hum or hum.Health <= 0 then return false end
-    local st = realState(hum)
-    if st == Enum.HumanoidStateType.Freefall or st == Enum.HumanoidStateType.Jumping then
-        return true
-    end
-    return realFloor(hum) == Enum.Material.Air
-end
+local slideParams = RaycastParams.new()
+slideParams.IgnoreWater = true
+slideParams.FilterType = Enum.RaycastFilterType.Exclude
 
 local function holdingJump()
     return UIS:IsKeyDown(Enum.KeyCode.Space) or UIS:IsKeyDown(Enum.KeyCode.ButtonA)
@@ -991,11 +926,12 @@ local function doJump(auto)
     local root = hum.RootPart
     if not root or root.Anchored then return end
 
-    if isAirborne(hum) then
+    local grounded = hum.FloorMaterial ~= Enum.Material.Air
+    if grounded then
+        airJumps = 0
+    else
         if S.jumpLimit >= 0 and airJumps >= S.jumpLimit then return end
         airJumps += 1
-    else
-        airJumps = 0
     end
     lastJump = now
 
@@ -1013,84 +949,47 @@ local function doJump(auto)
     end
 end
 
-track(UIS.JumpRequest:Connect(function() pcall(doJump, false) end))
-
-track(RunService.Stepped:Connect(function()
-    local hum = myHum()
+local function pixelSlide()
+    if not S.pixelSlide then return end
+    local char = lp.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
     if not hum or hum.Health <= 0 then return end
-    if S.bhop and not isAirborne(hum) then
+    if hum.FloorMaterial ~= Enum.Material.Air then return end
+
+    local forward = UIS:IsKeyDown(Enum.KeyCode.W)
+    local left = UIS:IsKeyDown(Enum.KeyCode.A)
+    local right = UIS:IsKeyDown(Enum.KeyCode.D)
+    if not (forward and (left or right)) then return end
+
+    local dir = hum.MoveDirection
+    if dir.Magnitude < 0.1 then return end
+    local root = hum.RootPart
+    if not root then return end
+
+    slideParams.FilterDescendantsInstances = { char }
+    local hit = Workspace:Raycast(root.Position, dir.Unit * 3.2, slideParams)
+    if not hit then return end
+    if math.abs(hit.Normal.Y) > 0.62 then return end
+
+    local v = root.AssemblyLinearVelocity
+    root.AssemblyLinearVelocity = Vector3.new(v.X, 0, v.Z)
+end
+
+track(UIS.JumpRequest:Connect(function() pcall(doJump, false) end))
+track(RunService.Stepped:Connect(function()
+    local char = lp.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    if S.bhop and hum.FloorMaterial ~= Enum.Material.Air then
         airJumps = 0
         if holdingJump() then pcall(doJump, true) end
     end
+    if S.pixelSlide then pcall(pixelSlide) end
 end))
-
-track(lp.CharacterAdded:Connect(function() airJumps = 0 end))
-
---==============================================================
---  NO AIR SPREAD
---==============================================================
-local origIndex, origNamecall = nil, nil
-local hookedIndex, hookedNamecall = false, false
-
-if typeof(hookmetamethod) == "function" then
-    local ok = pcall(function()
-        origIndex = hookmetamethod(game, "__index", function(self, key)
-            if not selfRead then
-                if key == "FloorMaterial" and S.noAirSpread then
-                    local hum = myHum()
-                    if hum and rawequal(self, hum) then
-                        local real = origIndex(self, key)
-                        if real == Enum.Material.Air then
-                            return Enum.Material.Plastic
-                        end
-                        return real
-                    end
-                elseif key == "CameraMode" and S.thirdPerson and rawequal(self, lp) then
-                    return Enum.CameraMode.Classic
-                end
-            end
-            return origIndex(self, key)
-        end)
-    end)
-    hookedIndex = ok
-end
-
-if typeof(hookmetamethod) == "function" and typeof(getnamecallmethod) == "function" then
-    local ok = pcall(function()
-        origNamecall = hookmetamethod(game, "__namecall", function(self, ...)
-            if S.noAirSpread and not selfRead and getnamecallmethod() == "GetState" then
-                local hum = myHum()
-                if hum and rawequal(self, hum) then
-                    local st = origNamecall(self, ...)
-                    if st == Enum.HumanoidStateType.Freefall or st == Enum.HumanoidStateType.Jumping then
-                        return Enum.HumanoidStateType.Running
-                    end
-                    return st
-                end
-            end
-            return origNamecall(self, ...)
-        end)
-    end)
-    hookedNamecall = ok
-end
-
-local function setAirSpread(on)
-    S.noAirSpread = on
-    local hum = myHum()
-    if hum then
-        pcall(function() hum.FloorMaterial = on and Enum.Material.Plastic or Enum.Material.Air end)
-    end
-end
-
 track(RunService.RenderStepped:Connect(function()
-    if not S.noAirSpread then return end
-    local hum = myHum()
-    if not hum or hum.Health <= 0 then return end
-    local st = realState(hum)
-    if st == Enum.HumanoidStateType.Freefall or st == Enum.HumanoidStateType.Jumping then
-        pcall(function() hum.FloorMaterial = Enum.Material.Plastic end)
-    end
+    if S.pixelSlide then pcall(pixelSlide) end
 end))
+track(lp.CharacterAdded:Connect(function() airJumps = 0 end))
 
 --==============================================================
 --  НЕБО
@@ -1476,53 +1375,12 @@ section(movePage, "бхоп")
 toggle(movePage, "Бхоп (держать пробел)", false, function(v) S.bhop = v; airJumps = 0 end)
 slider(movePage, "Прыжков в воздухе", -1, 10, 0, function(v) S.jumpLimit = v; airJumps = 0 end)
 
-section(movePage, "разброс")
-toggle(movePage, "Убрать разброс в полёте", false, function(v) setAirSpread(v) end)
+section(movePage, "пиксель слайд")
+toggle(movePage, "Pixel Slide (W + A/D у стены)", false, function(v) S.pixelSlide = v end)
 
 section(movePage, "камера")
-local capturing = false
-local tpBtn
-
-local function refreshTpBtn()
-    if not tpBtn then return end
-    tpBtn.Text = (S.thirdPerson and "Третье лицо: ВКЛ" or "Третье лицо: ВЫКЛ") .. "   [" .. S.tpBind.Name .. "]"
-    tpBtn.BackgroundColor3 = S.thirdPerson and CONFIG.AccentDark or Color3.fromRGB(30, 30, 42)
-end
-
-local function toggleThirdPerson()
-    S.thirdPerson = not S.thirdPerson
-    applyCameraMode()
-    notify(S.thirdPerson and "Третье лицо включено" or "Третье лицо выключено")
-    refreshTpBtn()
-end
-
-tpBtn = button(movePage, "", function() toggleThirdPerson() end)
-refreshTpBtn()
-
-button(movePage, "Сменить бинд", function()
-    if capturing then return end
-    capturing = true
-    tpBtn.Text = "Нажми клавишу…"
-    local conn
-    conn = UIS.InputBegan:Connect(function(i, processed)
-        if processed then return end
-        if i.UserInputType ~= Enum.UserInputType.Keyboard then return end
-        if i.KeyCode == Enum.KeyCode.Unknown then return end
-        S.tpBind = i.KeyCode
-        capturing = false
-        if conn then conn:Disconnect() end
-        refreshTpBtn()
-    end)
-    track(conn)
-end)
-
-slider(movePage, "Дистанция камеры", 6, 40, 12, function(v)
-    S.tpDistance = v
-    if S.thirdPerson then applyCameraMode() end
-end)
-
 toggle(movePage, "Фиксация FOV", false, function(v)
-    if v and camera then fovOriginal = camera.FieldOfView end
+    if v then fovOriginal = (camera and camera.FieldOfView) or 70 end
     S.fovEnabled = v
     applyFov()
 end)
@@ -1594,12 +1452,9 @@ section(miscPage, "безопасность")
 button(miscPage, "PANIC — выключить всё", function()
     S.espEnabled = false
     S.bhop = false
-    setAirSpread(false)
+    S.pixelSlide = false
     S.fovEnabled = false
-    S.thirdPerson = false
     applyFov()
-    applyCameraMode()
-    refreshTpBtn()
     notify("Всё выключено")
 end)
 button(miscPage, "Выгрузить скрипт", function()
@@ -1617,13 +1472,7 @@ end))
 
 track(UIS.InputBegan:Connect(function(input, processed)
     if processed then return end
-    if input.KeyCode == CONFIG.Keybind then
-        main.Visible = not main.Visible
-        return
-    end
-    if not capturing and input.KeyCode == S.tpBind then
-        toggleThirdPerson()
-    end
+    if input.KeyCode == CONFIG.Keybind then main.Visible = not main.Visible end
 end))
 
 main.Position = UDim2.new(0.5, -243, 0.5, -170)
@@ -1646,15 +1495,6 @@ tabBars.visual.Visible = true
 local function unload()
     for _, c in ipairs(connections) do pcall(function() c:Disconnect() end) end
     for player in pairs(ESP.objects) do unbindPlayer(player) end
-    if hookedIndex and origIndex then pcall(function() hookmetamethod(game, "__index", origIndex) end) end
-    if hookedNamecall and origNamecall then pcall(function() hookmetamethod(game, "__namecall", origNamecall) end) end
-    local hum = myHum()
-    if hum then pcall(function() hum.FloorMaterial = Enum.Material.Air end) end
-    pcall(function()
-        lp.CameraMode = savedCamMode
-        lp.CameraMinZoomDistance = savedZoomMin
-        lp.CameraMaxZoomDistance = savedZoomMax
-    end)
     if camera then pcall(function() camera.FieldOfView = fovOriginal end) end
     pcall(restoreLighting)
     pcall(function() gui:Destroy() end)
@@ -1663,9 +1503,6 @@ end
 
 getgenv().SleepScript = { Unload = unload, Settings = S }
 notify("SleepScript загружен. RightShift — меню")
-if not (hookedIndex or hookedNamecall) then
-    notify("Хуки недоступны — работает только запись свойства")
-end
 logFile("loaded on " .. game.JobId)
 
 end)
