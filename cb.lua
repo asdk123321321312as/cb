@@ -5,7 +5,7 @@
     ESP, бхоп, no air spread, FOV, небо с пресетами, автобаннихоп.
 --]]
 
-local CONFIG = {
+local CONFIG = {   -- пизда
     ScriptURL   = "",
     Accent      = Color3.fromRGB(122, 92, 255),
     AccentDark  = Color3.fromRGB(64, 46, 150),
