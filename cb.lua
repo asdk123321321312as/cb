@@ -7,7 +7,7 @@
 --]]
 
 local CONFIG = {
-    ScriptURL   = "",
+    ScriptURL   = "", -- пизла
     Accent      = Color3.fromRGB(122, 92, 255),
     AccentDark  = Color3.fromRGB(64, 46, 150),
     Keybind     = Enum.KeyCode.RightShift,
