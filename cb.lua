@@ -1,9 +1,8 @@
 --!nocheck
 --[[
-    SleepScript • Counter Blox (Rolve)  v1.4
+    SleepScript • Counter Blox (Rolve)  v1.5
     ---------------------------------------------------------------
-    ESP, бхоп, исправленный pixel slide, no air spread, FOV,
-    небо с пресетами, автобаннихоп.
+    ESP, бхоп, no air spread, FOV, небо с пресетами, автобаннихоп.
 --]]
 
 local CONFIG = {
@@ -13,7 +12,7 @@ local CONFIG = {
     Keybind     = Enum.KeyCode.RightShift,
     DetectGrace = 20,
     LogOnly     = false,
-    Version     = "1.4",
+    Version     = "1.5",
 }
 
 if getgenv().SleepScript then pcall(function() getgenv().SleepScript.Unload() end) end
@@ -72,7 +71,6 @@ local S = {
 
     bhop         = false,
     jumpLimit    = 0,
-    pixelSlide   = false,
     noAirSpread  = false,
 
     fovEnabled   = false,
@@ -183,6 +181,11 @@ local main = new("Frame", {
 new("UICorner", { CornerRadius = UDim.new(0, 12) }, main)
 new("UIStroke", { Color = CONFIG.Accent, Thickness = 1, Transparency = 0.5 }, main)
 
+-- подложка живёт только вместе с окном
+track(main:GetPropertyChangedSignal("Visible"):Connect(function()
+    glow.Visible = main.Visible
+end))
+
 local header = new("Frame", {
     Size = UDim2.new(1, 0, 0, 58),
     BackgroundColor3 = Color3.fromRGB(19, 17, 32),
@@ -220,7 +223,7 @@ new("UIGradient", {
 }, title)
 
 new("TextLabel", {
-    Text = "counter blox  •  esp  •  bhop  •  slide  •  no spread  •  sky  •  rac watch",
+    Text = "counter blox  •  esp  •  bhop  •  no spread  •  sky  •  rac watch",
     Font = Enum.Font.Gotham,
     TextSize = 11,
     TextColor3 = Color3.fromRGB(150, 150, 175),
@@ -902,32 +905,44 @@ track(RunService.RenderStepped:Connect(function(dt)
 end))
 
 --==============================================================
---  БХОП / PIXEL SLIDE / NO AIR SPREAD
+--  БХОП
 --==============================================================
 local lastJump = 0
 local airJumps = 0
-
-local slideParams = RaycastParams.new()
-slideParams.IgnoreWater = true
-slideParams.FilterType = Enum.RaycastFilterType.Exclude
-
-local SLIDE = { accel = 120, max = 115, base = 34, reach = 3.0 }
 
 local function myHum()
     local char = lp.Character
     return char and char:FindFirstChildOfClass("Humanoid")
 end
 
--- состояние воздуха читаем по GetState, а не по FloorMaterial:
--- FloorMaterial мы намеренно подменяем ниже
+-- защищённое чтение: не попадает под наши же хуки
+local selfRead = false
+
+local function realState(hum)
+    if not hum then return nil end
+    selfRead = true
+    local ok, st = pcall(function() return hum:GetState() end)
+    selfRead = false
+    if ok then return st end
+    return nil
+end
+
+local function realFloor(hum)
+    if not hum then return nil end
+    selfRead = true
+    local ok, mat = pcall(function() return hum.FloorMaterial end)
+    selfRead = false
+    if ok then return mat end
+    return nil
+end
+
 local function isAirborne(hum)
     if not hum or hum.Health <= 0 then return false end
-    if hum.FloorMaterial == Enum.Material.Air then return true end
-    local ok, st = pcall(function() return hum:GetState() end)
-    if ok and (st == Enum.HumanoidStateType.Freefall or st == Enum.HumanoidStateType.Jumping) then
+    local st = realState(hum)
+    if st == Enum.HumanoidStateType.Freefall or st == Enum.HumanoidStateType.Jumping then
         return true
     end
-    return false
+    return realFloor(hum) == Enum.Material.Air
 end
 
 local function holdingJump()
@@ -968,96 +983,30 @@ local function doJump(auto)
     end
 end
 
--- ищем стену строго сбоку от персонажа, в трёх точках по высоте
-local function findWall(char, root, side)
-    local cam = Workspace.CurrentCamera
-    if not cam then return nil end
-    local r = cam.CFrame.RightVector
-    local dir = Vector3.new(r.X, 0, r.Z)
-    if dir.Magnitude < 0.05 then return nil end
-    dir = dir.Unit * side
-
-    slideParams.FilterDescendantsInstances = { char }
-    local origins = {
-        root.Position,
-        root.Position - Vector3.new(0, 1.4, 0),
-        root.Position + Vector3.new(0, 1.0, 0),
-    }
-    for _, origin in ipairs(origins) do
-        local hit = Workspace:Raycast(origin, dir * SLIDE.reach, slideParams)
-        if hit and math.abs(hit.Normal.Y) < 0.55 then
-            return hit
-        end
-    end
-    return nil
-end
-
-local function pixelSlide(dt)
-    if not S.pixelSlide then return end
-
-    local char = lp.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    local root = hum and hum.RootPart
-    if not root or hum.Health <= 0 or not isAirborne(hum) then return end
-
-    if not UIS:IsKeyDown(Enum.KeyCode.W) then return end
-    local side = UIS:IsKeyDown(Enum.KeyCode.A) and -1 or (UIS:IsKeyDown(Enum.KeyCode.D) and 1 or 0)
-    if side == 0 then return end
-
-    local hit = findWall(char, root, side)
-    if not hit then return end
-
-    local n = Vector3.new(hit.Normal.X, 0, hit.Normal.Z)
-    if n.Magnitude < 0.1 then return end
-    n = n.Unit
-
-    local v = root.AssemblyLinearVelocity
-    local horiz = Vector3.new(v.X, 0, v.Z)
-
-    -- срезаем компоненту «в стену»: остаётся чистая касательная
-    local tangent = horiz - n * horiz:Dot(n)
-    if tangent.Magnitude < 1 then
-        local cam = Workspace.CurrentCamera
-        if not cam then return end
-        local look = cam.CFrame.LookVector
-        look = Vector3.new(look.X, 0, look.Z)
-        tangent = look - n * look:Dot(n)
-        if tangent.Magnitude < 0.1 then return end
-    end
-    tangent = tangent.Unit
-
-    local speed = math.max(horiz.Magnitude, SLIDE.base)
-    if speed < SLIDE.max then
-        speed = math.min(speed + SLIDE.accel * dt, SLIDE.max)
-    end
-
-    root.AssemblyLinearVelocity = tangent * speed + Vector3.new(0, v.Y, 0)
-end
-
 track(UIS.JumpRequest:Connect(function() pcall(doJump, false) end))
 
-track(RunService.Stepped:Connect(function(_, dt)
-    local char = lp.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
+track(RunService.Stepped:Connect(function()
+    local hum = myHum()
     if not hum or hum.Health <= 0 then return end
-
     if S.bhop and not isAirborne(hum) then
         airJumps = 0
         if holdingJump() then pcall(doJump, true) end
     end
-    if S.pixelSlide then pcall(pixelSlide, math.clamp(dt, 0, 0.05)) end
 end))
 
 track(lp.CharacterAdded:Connect(function() airJumps = 0 end))
 
--- ---- no air spread -------------------------------------------
--- игровому коду отдаём «пол под ногами», пока мы в воздухе
-local origIndex, hooked = nil, false
+--==============================================================
+--  NO AIR SPREAD
+--==============================================================
+-- три канала сразу: чтение FloorMaterial, GetState и сама запись свойства
+local origIndex, origNamecall = nil, nil
+local hookedIndex, hookedNamecall = false, false
 
-if typeof(hookmetamethod) == "function" and typeof(checkcaller) == "function" then
+if typeof(hookmetamethod) == "function" then
     local ok = pcall(function()
         origIndex = hookmetamethod(game, "__index", function(self, key)
-            if key == "FloorMaterial" and S.noAirSpread and not checkcaller() then
+            if key == "FloorMaterial" and S.noAirSpread and not selfRead then
                 local hum = myHum()
                 if hum and rawequal(self, hum) then
                     local real = origIndex(self, key)
@@ -1070,17 +1019,43 @@ if typeof(hookmetamethod) == "function" and typeof(checkcaller) == "function" th
             return origIndex(self, key)
         end)
     end)
-    hooked = ok
+    hookedIndex = ok
 end
 
-local spreadAcc = 0
-track(RunService.RenderStepped:Connect(function(dt)
-    if not S.noAirSpread then return end
-    spreadAcc += dt
-    if spreadAcc < 0.03 then return end
-    spreadAcc = 0
+if typeof(hookmetamethod) == "function" and typeof(getnamecallmethod) == "function" then
+    local ok = pcall(function()
+        origNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+            if S.noAirSpread and not selfRead and getnamecallmethod() == "GetState" then
+                local hum = myHum()
+                if hum and rawequal(self, hum) then
+                    local st = origNamecall(self, ...)
+                    if st == Enum.HumanoidStateType.Freefall or st == Enum.HumanoidStateType.Jumping then
+                        return Enum.HumanoidStateType.Running
+                    end
+                    return st
+                end
+            end
+            return origNamecall(self, ...)
+        end)
+    end)
+    hookedNamecall = ok
+end
+
+local function setAirSpread(on)
+    S.noAirSpread = on
     local hum = myHum()
-    if hum and hum.Health > 0 and hum.FloorMaterial == Enum.Material.Air then
+    if hum then
+        pcall(function() hum.FloorMaterial = on and Enum.Material.Plastic or Enum.Material.Air end)
+    end
+end
+
+-- держим значение живым на случай, если репликация вернёт Air
+track(RunService.RenderStepped:Connect(function()
+    if not S.noAirSpread then return end
+    local hum = myHum()
+    if not hum or hum.Health <= 0 then return end
+    if realState(hum) == Enum.HumanoidStateType.Freefall
+        or realState(hum) == Enum.HumanoidStateType.Jumping then
         pcall(function() hum.FloorMaterial = Enum.Material.Plastic end)
     end
 end))
@@ -1469,14 +1444,8 @@ section(movePage, "бхоп")
 toggle(movePage, "Бхоп (держать пробел)", false, function(v) S.bhop = v; airJumps = 0 end)
 slider(movePage, "Прыжков в воздухе", -1, 10, 0, function(v) S.jumpLimit = v; airJumps = 0 end)
 
-section(movePage, "пиксель слайд")
-toggle(movePage, "Pixel Slide (W + A/D у стены)", false, function(v) S.pixelSlide = v end)
-slider(movePage, "Сила разгона", 20, 600, 120, function(v) SLIDE.accel = v end)
-slider(movePage, "Предел скорости", 40, 300, 115, function(v) SLIDE.max = v end)
-slider(movePage, "Дистанция луча (x10)", 15, 60, 30, function(v) SLIDE.reach = v / 10 end)
-
 section(movePage, "разброс")
-toggle(movePage, "Убрать разброс в полёте", false, function(v) S.noAirSpread = v end)
+toggle(movePage, "Убрать разброс в полёте", false, function(v) setAirSpread(v) end)
 
 section(movePage, "камера")
 toggle(movePage, "Фиксация FOV", false, function(v)
@@ -1552,8 +1521,7 @@ section(miscPage, "безопасность")
 button(miscPage, "PANIC — выключить всё", function()
     S.espEnabled = false
     S.bhop = false
-    S.pixelSlide = false
-    S.noAirSpread = false
+    setAirSpread(false)
     S.fovEnabled = false
     applyFov()
     notify("Всё выключено")
@@ -1596,7 +1564,8 @@ tabBars.visual.Visible = true
 local function unload()
     for _, c in ipairs(connections) do pcall(function() c:Disconnect() end) end
     for player in pairs(ESP.objects) do unbindPlayer(player) end
-    if hooked and origIndex then pcall(function() hookmetamethod(game, "__index", origIndex) end) end
+    if hookedIndex and origIndex then pcall(function() hookmetamethod(game, "__index", origIndex) end) end
+    if hookedNamecall and origNamecall then pcall(function() hookmetamethod(game, "__namecall", origNamecall) end) end
     local hum = myHum()
     if hum then pcall(function() hum.FloorMaterial = Enum.Material.Air end) end
     if camera then pcall(function() camera.FieldOfView = fovOriginal end) end
@@ -1605,9 +1574,12 @@ local function unload()
     getgenv().SleepScript = nil
 end
 
-getgenv().SleepScript = { Unload = unload, Settings = S }
+getgenv().SleepScript = { Unload = self and nil or unload, Settings = S }
+getgenv().SleepScript.Unload = unload
 notify("SleepScript загружен. RightShift — меню")
-if not hooked then notify("Хук разброса недоступен — работает резервный режим") end
+if not (hookedIndex or hookedNamecall) then
+    notify("Хуки недоступны — работает только запись свойства")
+end
 logFile("loaded on " .. game.JobId)
 
 end)
