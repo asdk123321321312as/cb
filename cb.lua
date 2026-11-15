@@ -1,6 +1,6 @@
 --!nocheck
 --[[
-    SleepScript • Counter Blox (Rolve)  v1.6
+    SleepScript • Counter Blox (Rolve)  v1.7
     ---------------------------------------------------------------
     ESP, бхоп, no air spread, фиксация FOV, третье лицо по бинду,
     небо с пресетами, автобаннихоп.
@@ -13,7 +13,7 @@ local CONFIG = {
     Keybind     = Enum.KeyCode.RightShift,
     DetectGrace = 20,
     LogOnly     = false,
-    Version     = "1.6",
+    Version     = "1.7",
 }
 
 if getgenv().SleepScript then pcall(function() getgenv().SleepScript.Unload() end) end
@@ -119,6 +119,15 @@ local savedCamMode = lp.CameraMode
 local savedZoomMin = lp.CameraMinZoomDistance
 local savedZoomMax = lp.CameraMaxZoomDistance
 
+-- цель режима и до какого времени её удерживать
+local camTarget = savedCamMode
+local camHoldUntil = 0
+local camRefresh = function() end
+
+local function tpZoom()
+    return math.clamp(S.tpDistance, 6, 40)
+end
+
 local function applyFov()
     local cam = camera or Workspace.CurrentCamera
     if not cam then return end
@@ -129,13 +138,15 @@ local function applyFov()
     end
 end
 
-local function applyCameraMode()
+local function pushCam()
     pcall(function()
         if S.thirdPerson then
+            camTarget = Enum.CameraMode.Classic
             lp.CameraMode = Enum.CameraMode.Classic
             lp.CameraMinZoomDistance = 4
-            lp.CameraMaxZoomDistance = math.clamp(S.tpDistance, 6, 40)
+            lp.CameraMaxZoomDistance = tpZoom()
         else
+            camTarget = Enum.CameraMode.LockFirstPerson
             lp.CameraMode = Enum.CameraMode.LockFirstPerson
             lp.CameraMinZoomDistance = 0.5
             lp.CameraMaxZoomDistance = 0.5
@@ -143,8 +154,15 @@ local function applyCameraMode()
     end)
 end
 
--- держим и FOV, и режим камеры прямо перед кадром:
--- так перезапись со стороны игры не успевает сработать
+-- третье лицо держим постоянно, первую персону — ещё 2 секунды после возврата,
+-- чтобы игра не успела отбросить режим обратно
+local function setCamMode(third)
+    S.thirdPerson = third and true or false
+    camHoldUntil = third and math.huge or (os.clock() + 2)
+    pushCam()
+    pcall(camRefresh)
+end
+
 track(RunService.RenderStepped:Connect(function()
     local cam = camera or Workspace.CurrentCamera
     if not cam then return end
@@ -155,16 +173,23 @@ track(RunService.RenderStepped:Connect(function()
         end
     end
 
-    if S.thirdPerson then
-        pcall(function()
-            if lp.CameraMode ~= Enum.CameraMode.Classic then
-                lp.CameraMode = Enum.CameraMode.Classic
+    if os.clock() <= camHoldUntil then
+        if lp.CameraMode ~= camTarget then
+            pcall(function() lp.CameraMode = camTarget end)
+        end
+        if S.thirdPerson then
+            if math.abs(lp.CameraMaxZoomDistance - tpZoom()) > 0.1 then
+                pcall(function()
+                    lp.CameraMinZoomDistance = 4
+                    lp.CameraMaxZoomDistance = tpZoom()
+                end)
             end
-            if math.abs(lp.CameraMaxZoomDistance - math.clamp(S.tpDistance, 6, 40)) > 0.1 then
-                lp.CameraMinZoomDistance = 4
-                lp.CameraMaxZoomDistance = math.clamp(S.tpDistance, 6, 40)
-            end
-        end)
+        elseif lp.CameraMaxZoomDistance > 0.6 then
+            pcall(function()
+                lp.CameraMinZoomDistance = 0.5
+                lp.CameraMaxZoomDistance = 0.5
+            end)
+        end
     end
 end))
 
@@ -214,7 +239,6 @@ local main = new("Frame", {
 new("UICorner", { CornerRadius = UDim.new(0, 12) }, main)
 new("UIStroke", { Color = CONFIG.Accent, Thickness = 1, Transparency = 0.5 }, main)
 
--- подложка живёт только вместе с окном
 track(main:GetPropertyChangedSignal("Visible"):Connect(function()
     glow.Visible = main.Visible
 end))
@@ -1024,7 +1048,12 @@ track(RunService.Stepped:Connect(function()
     end
 end))
 
-track(lp.CharacterAdded:Connect(function() airJumps = 0 end))
+track(lp.CharacterAdded:Connect(function()
+    airJumps = 0
+    task.delay(0.4, function()
+        if S.thirdPerson then pushCam() end
+    end)
+end))
 
 --==============================================================
 --  NO AIR SPREAD
@@ -1035,18 +1064,14 @@ local hookedIndex, hookedNamecall = false, false
 if typeof(hookmetamethod) == "function" then
     local ok = pcall(function()
         origIndex = hookmetamethod(game, "__index", function(self, key)
-            if not selfRead then
-                if key == "FloorMaterial" and S.noAirSpread then
-                    local hum = myHum()
-                    if hum and rawequal(self, hum) then
-                        local real = origIndex(self, key)
-                        if real == Enum.Material.Air then
-                            return Enum.Material.Plastic
-                        end
-                        return real
+            if key == "FloorMaterial" and S.noAirSpread and not selfRead then
+                local hum = myHum()
+                if hum and rawequal(self, hum) then
+                    local real = origIndex(self, key)
+                    if real == Enum.Material.Air then
+                        return Enum.Material.Plastic
                     end
-                elseif key == "CameraMode" and S.thirdPerson and rawequal(self, lp) then
-                    return Enum.CameraMode.Classic
+                    return real
                 end
             end
             return origIndex(self, key)
@@ -1481,6 +1506,7 @@ toggle(movePage, "Убрать разброс в полёте", false, function(
 
 section(movePage, "камера")
 local capturing = false
+local captureConn = nil
 local tpBtn
 
 local function refreshTpBtn()
@@ -1488,37 +1514,62 @@ local function refreshTpBtn()
     tpBtn.Text = (S.thirdPerson and "Третье лицо: ВКЛ" or "Третье лицо: ВЫКЛ") .. "   [" .. S.tpBind.Name .. "]"
     tpBtn.BackgroundColor3 = S.thirdPerson and CONFIG.AccentDark or Color3.fromRGB(30, 30, 42)
 end
+camRefresh = refreshTpBtn
 
-local function toggleThirdPerson()
-    S.thirdPerson = not S.thirdPerson
-    applyCameraMode()
-    notify(S.thirdPerson and "Третье лицо включено" or "Третье лицо выключено")
+local function stopCapture()
+    capturing = false
+    if captureConn then
+        pcall(function() captureConn:Disconnect() end)
+        captureConn = nil
+    end
     refreshTpBtn()
 end
 
-tpBtn = button(movePage, "", function() toggleThirdPerson() end)
-refreshTpBtn()
-
-button(movePage, "Сменить бинд", function()
-    if capturing then return end
+local function startCapture()
+    if capturing then
+        stopCapture()
+        return
+    end
     capturing = true
-    tpBtn.Text = "Нажми клавишу…"
-    local conn
-    conn = UIS.InputBegan:Connect(function(i, processed)
-        if processed then return end
+    tpBtn.Text = "Нажми клавишу… (клик — отмена)"
+    local token = os.clock()
+    captureConn = UIS.InputBegan:Connect(function(i, processed)
+        if not capturing then return end
+        if i.UserInputType == Enum.UserInputType.MouseButton1
+            or i.UserInputType == Enum.UserInputType.Touch then
+            stopCapture()
+            return
+        end
         if i.UserInputType ~= Enum.UserInputType.Keyboard then return end
+        if processed then return end
         if i.KeyCode == Enum.KeyCode.Unknown then return end
         S.tpBind = i.KeyCode
-        capturing = false
-        if conn then conn:Disconnect() end
-        refreshTpBtn()
+        stopCapture()
     end)
-    track(conn)
+    task.delay(6, function()
+        if capturing and captureConn then
+            -- отмена по таймауту, только если бинд всё ещё не выбран
+            if S.tpBind == Enum.KeyCode.Unknown then stopCapture() end
+        end
+    end)
+end
+
+tpBtn = button(movePage, "", function()
+    setCamMode(not S.thirdPerson)
+    notify(S.thirdPerson and "Третье лицо включено" or "Третье лицо выключено")
+end)
+refreshTpBtn()
+
+button(movePage, "Сменить бинд", startCapture)
+button(movePage, "Вернуть первую персону", function()
+    stopCapture()
+    setCamMode(false)
+    notify("Первая персона")
 end)
 
 slider(movePage, "Дистанция камеры", 6, 40, 12, function(v)
     S.tpDistance = v
-    if S.thirdPerson then applyCameraMode() end
+    if S.thirdPerson then pushCam() end
 end)
 
 toggle(movePage, "Фиксация FOV", false, function(v)
@@ -1596,10 +1647,9 @@ button(miscPage, "PANIC — выключить всё", function()
     S.bhop = false
     setAirSpread(false)
     S.fovEnabled = false
-    S.thirdPerson = false
     applyFov()
-    applyCameraMode()
-    refreshTpBtn()
+    stopCapture()
+    setCamMode(false)
     notify("Всё выключено")
 end)
 button(miscPage, "Выгрузить скрипт", function()
@@ -1622,7 +1672,8 @@ track(UIS.InputBegan:Connect(function(input, processed)
         return
     end
     if not capturing and input.KeyCode == S.tpBind then
-        toggleThirdPerson()
+        setCamMode(not S.thirdPerson)
+        notify(S.thirdPerson and "Третье лицо включено" or "Третье лицо выключено")
     end
 end))
 
@@ -1646,6 +1697,7 @@ tabBars.visual.Visible = true
 local function unload()
     for _, c in ipairs(connections) do pcall(function() c:Disconnect() end) end
     for player in pairs(ESP.objects) do unbindPlayer(player) end
+    if captureConn then pcall(function() captureConn:Disconnect() end) end
     if hookedIndex and origIndex then pcall(function() hookmetamethod(game, "__index", origIndex) end) end
     if hookedNamecall and origNamecall then pcall(function() hookmetamethod(game, "__namecall", origNamecall) end) end
     local hum = myHum()
