@@ -1,3 +1,11 @@
+--!nocheck
+--[[
+    SleepScript • Counter Blox (Rolve)  v3.3
+    ---------------------------------------------------------------
+    ESP (реальное время), бхоп, no air spread, фиксация FOV,
+    окно статистики, FPS boost, автобан.
+    v3.3: земля определяется рейкастом — бхоп не улетает в небо.
+]]
 
 local CONFIG = {
     ScriptURL   = "",
@@ -6,7 +14,7 @@ local CONFIG = {
     Keybind     = Enum.KeyCode.RightShift,
     DetectGrace = 20,
     LogOnly     = false,
-    Version     = "3.2",
+    Version     = "3.3",
 }
 
 if getgenv().SleepScript then pcall(function() getgenv().SleepScript.Unload() end) end
@@ -133,24 +141,28 @@ local function realFloor(hum)
     return nil
 end
 
--- при включённом разбросе читаем через хуки: в воздухе они отдают Running/Plastic,
--- поэтому бхоп видит "землю" и продолжает работать
 local function isAirborne(hum)
     if not hum or hum.Health <= 0 then return false end
-    if S.noAirSpread then
-        local ok, st = pcall(function() return hum:GetState() end)
-        if ok and (st == Enum.HumanoidStateType.Freefall or st == Enum.HumanoidStateType.Jumping) then
-            return true
-        end
-        local ok2, mat = pcall(function() return hum.FloorMaterial end)
-        if ok2 then return mat == Enum.Material.Air end
-        return false
-    end
     local st = realState(hum)
     if st == Enum.HumanoidStateType.Freefall or st == Enum.HumanoidStateType.Jumping then
         return true
     end
     return realFloor(hum) == Enum.Material.Air
+end
+
+-- земля по рейкасту: не зависит ни от хуков, ни от FloorMaterial, ни от состояния
+local groundParams = RaycastParams.new()
+groundParams.FilterType = Enum.RaycastFilterType.Exclude
+groundParams.FilterDescendantsInstances = {}
+groundParams.IgnoreWater = true
+
+local function grounded()
+    local hum = curHum
+    if not hum or hum.Health <= 0 then return false end
+    local root = hum.RootPart
+    if not root or root.Anchored then return false end
+    groundParams.FilterDescendantsInstances = { lp.Character }
+    return Workspace:Raycast(root.Position, Vector3.new(0, -5.5, 0), groundParams) ~= nil
 end
 
 --==============================================================
@@ -808,7 +820,6 @@ local function drawBox(rec, x, y, w, h, col)
     rec.box.Filled = false
 end
 
--- части и кости кэшируются на персонажа, чтобы не искать их каждый кадр
 local function resolveParts(entry)
     local char = entry.char
     if not char or not char.Parent then return nil end
@@ -1009,32 +1020,17 @@ local function doJump(auto)
     local root = hum.RootPart
     if not root or root.Anchored then return end
 
-    local st = realState(hum)
-    local reallyAir = (st == Enum.HumanoidStateType.Freefall or st == Enum.HumanoidStateType.Jumping)
-
-    if reallyAir then
-        if not S.noAirSpread and S.jumpLimit >= 0 and airJumps >= S.jumpLimit then return end
+    local air = isAirborne(hum)
+    if air then
+        if S.jumpLimit >= 0 and airJumps >= S.jumpLimit then return end
         airJumps += 1
     else
         airJumps = 0
     end
     lastJump = now
 
-    if S.bhopAggro then
+    if S.bhopAggro or S.noAirSpread then
         pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
-        local jp = hum.JumpPower
-        if not hum.UseJumpPower then
-            jp = math.sqrt(2 * Workspace.Gravity * hum.JumpHeight)
-        end
-        if jp and jp > 0 then
-            local v = root.AssemblyLinearVelocity
-            if v.Y < jp * 0.95 then
-                root.AssemblyLinearVelocity = Vector3.new(v.X, jp, v.Z)
-            end
-        end
-    elseif S.noAirSpread and reallyAir then
-        -- импульс напрямую в скорость, состояние не трогаем:
-        -- воздух остаётся воздухом, управление и momentum не ломаются
         local jp = hum.JumpPower
         if not hum.UseJumpPower then
             jp = math.sqrt(2 * Workspace.Gravity * hum.JumpHeight)
@@ -1053,9 +1049,10 @@ end
 track(UIS.JumpRequest:Connect(function() pcall(doJump, false) end))
 
 track(RunService.Stepped:Connect(function()
+    if not S.bhop then return end
     local hum = curHum
     if not hum or hum.Health <= 0 then return end
-    if S.bhop and not isAirborne(hum) then
+    if grounded() then
         airJumps = 0
         if holdingJump() then pcall(doJump, true) end
     end
