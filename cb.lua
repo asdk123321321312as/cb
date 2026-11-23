@@ -1,11 +1,12 @@
 --!nocheck
 --[[
-    SleepScript • Counter Blox (Rolve)  v3.4
+    SleepScript • Counter Blox (Rolve)  v3.5
     ---------------------------------------------------------------
     ESP (реальное время), бхоп, no air spread, фиксация FOV,
-    окно статистики, FPS boost, автобан, скинченджер.
+    окно статистики, FPS boost, автобан, скинченджер ножей.
     v3.3: земля определяется рейкастом — бхоп не улетает в небо.
-    v3.4: скинченджер ножей (локальный).
+    v3.4: скинченджер.
+    v3.5: скинченджер через lp.SkinFolder (TFolder/CTFolder).
 ]]
 
 local CONFIG = {
@@ -15,7 +16,7 @@ local CONFIG = {
     Keybind     = Enum.KeyCode.RightShift,
     DetectGrace = 20,
     LogOnly     = false,
-    Version     = "3.4",
+    Version     = "3.5",
 }
 
 if getgenv().SleepScript then pcall(function() getgenv().SleepScript.Unload() end) end
@@ -618,6 +619,28 @@ local function button(parent, text, cb)
     return b
 end
 
+local function textbox(parent, placeholder, cb)
+    local box = new("TextBox", {
+        Text = "",
+        PlaceholderText = placeholder,
+        Font = Enum.Font.Gotham,
+        TextSize = 12,
+        TextColor3 = Color3.fromRGB(230, 230, 242),
+        PlaceholderColor3 = Color3.fromRGB(118, 118, 136),
+        BackgroundColor3 = Color3.fromRGB(20, 20, 27),
+        BorderSizePixel = 0,
+        ClearTextOnFocus = false,
+        Size = UDim2.new(1, 0, 0, 28),
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, parent)
+    new("UICorner", { CornerRadius = UDim.new(0, 8) }, box)
+    new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, box)
+    box.FocusLost:Connect(function(enter)
+        if enter then cb(box.Text) end
+    end)
+    return box
+end
+
 local function chips(parent, items, current, cb, perRow)
     local cols = perRow or 4
     local grid = new("Frame", {
@@ -1210,16 +1233,15 @@ local function setBoost(on)
 end
 
 --==============================================================
---  SKINCHANGER
+--  SKINCHANGER (через lp.SkinFolder)
 --==============================================================
 local SKIN = {
     enabled   = false,
     autoApply = true,
     knife     = nil,
     skin      = nil,
-    catalog   = {},
-    applied   = {},
-    ready     = false,
+    pool      = {},
+    saved     = {},
     dead      = false,
 }
 
@@ -1227,6 +1249,70 @@ local KNIFE_WORDS = {
     "knife", "karambit", "bayonet", "m9", "butterfly", "flip", "gut", "falchion",
     "bowie", "huntsman", "shadow", "navaja", "stiletto", "ursus", "talon",
     "classic", "skeleton", "nomad", "paracord", "survival", "kukri", "daggers",
+    "cleaver", "sickle", "axe", "banana",
+}
+
+-- резервный список: используется, если игра не отдала данные
+local FALLBACK = {
+    "Banana_Stock",
+    "Bayonet_Aequalis", "Bayonet_Banner", "Bayonet_Candy Cane", "Bayonet_Consumed",
+    "Bayonet_Cosmos", "Bayonet_Crimson Tiger", "Bayonet_Crow", "Bayonet_Delinquent",
+    "Bayonet_Digital", "Bayonet_Easy-Bake", "Bayonet_Egg Shell", "Bayonet_Festive",
+    "Bayonet_Frozen Dream", "Bayonet_Geo Blade", "Bayonet_Ghastly", "Bayonet_Goo",
+    "Bayonet_Hallows", "Bayonet_Intertwine", "Bayonet_Marbleized", "Bayonet_Mariposa",
+    "Bayonet_Naval", "Bayonet_Neonic", "Bayonet_RSL", "Bayonet_Racer", "Bayonet_Sapphire",
+    "Bayonet_Silent Night", "Bayonet_Splattered", "Bayonet_Stock", "Bayonet_Topaz",
+    "Bayonet_Tropical", "Bayonet_Twitch", "Bayonet_UFO", "Bayonet_Wetland",
+    "Bayonet_Worn", "Bayonet_Wrapped",
+    "Bearded Axe_Beast", "Bearded Axe_Splattered", "Bearded Axe_Stock",
+    "Butterfly Knife_Aurora", "Butterfly Knife_Bloodwidow", "Butterfly Knife_Consumed",
+    "Butterfly Knife_Cosmos", "Butterfly Knife_Crimson Tiger", "Butterfly Knife_Crippled Fade",
+    "Butterfly Knife_Digital", "Butterfly Knife_Egg Shell", "Butterfly Knife_Freedom",
+    "Butterfly Knife_Frozen Dream", "Butterfly Knife_Goo", "Butterfly Knife_Hallows",
+    "Butterfly Knife_Icicle", "Butterfly Knife_Inversion", "Butterfly Knife_Jade Dream",
+    "Butterfly Knife_Marbleized", "Butterfly Knife_Naval", "Butterfly Knife_Neonic",
+    "Butterfly Knife_Reaper", "Butterfly Knife_Ruby", "Butterfly Knife_Scapter",
+    "Butterfly Knife_Splattered", "Butterfly Knife_Stock", "Butterfly Knife_Topaz",
+    "Butterfly Knife_Tropical", "Butterfly Knife_Twitch", "Butterfly Knife_Wetland",
+    "Butterfly Knife_White Boss", "Butterfly Knife_Worn", "Butterfly Knife_Wrapped",
+    "Cleaver_Spider", "Cleaver_Splattered", "Cleaver_Stock",
+    "Falchion Knife_Bloodwidow", "Falchion Knife_Chosen", "Falchion Knife_Coal",
+    "Falchion Knife_Consumed", "Falchion Knife_Cosmos", "Falchion Knife_Crimson Tiger",
+    "Falchion Knife_Crippled Fade", "Falchion Knife_Digital", "Falchion Knife_Egg Shell",
+    "Falchion Knife_Festive", "Falchion Knife_Freedom", "Falchion Knife_Frozen Dream",
+    "Falchion Knife_Goo", "Falchion Knife_Hallows", "Falchion Knife_Inversion",
+    "Falchion Knife_Late Night", "Falchion Knife_Marbleized", "Falchion Knife_Naval",
+    "Falchion Knife_Neonic", "Falchion Knife_Racer", "Falchion Knife_Ruby",
+    "Falchion Knife_Splattered", "Falchion Knife_Stock", "Falchion Knife_Topaz",
+    "Falchion Knife_Tropical", "Falchion Knife_Wetland", "Falchion Knife_Worn",
+    "Falchion Knife_Wrapped", "Falchion Knife_Zombie",
+    "Flip Knife_Stock",
+    "Gut Knife_Banner", "Gut Knife_Bloodwidow", "Gut Knife_Consumed", "Gut Knife_Cosmos",
+    "Gut Knife_Crimson Tiger", "Gut Knife_Crippled Fade", "Gut Knife_Digital",
+    "Gut Knife_Egg Shell", "Gut Knife_Frozen Dream", "Gut Knife_Geo Blade", "Gut Knife_Goo",
+    "Gut Knife_Hallows", "Gut Knife_Lurker", "Gut Knife_Marbleized", "Gut Knife_Naval",
+    "Gut Knife_Neonic", "Gut Knife_Present", "Gut Knife_Ruby", "Gut Knife_Rusty",
+    "Gut Knife_Splattered", "Gut Knife_Stock", "Gut Knife_Topaz", "Gut Knife_Tropical",
+    "Gut Knife_Wetland", "Gut Knife_Worn", "Gut Knife_Wrapped",
+    "Huntsman Knife_Aurora", "Huntsman Knife_Bloodwidow", "Huntsman Knife_Consumed",
+    "Huntsman Knife_Cosmos", "Huntsman Knife_Cozy", "Huntsman Knife_Crimson Tiger",
+    "Huntsman Knife_Crippled Fade", "Huntsman Knife_Digital", "Huntsman Knife_Egg Shell",
+    "Huntsman Knife_Frozen Dream", "Huntsman Knife_Geo Blade", "Huntsman Knife_Goo",
+    "Huntsman Knife_Hallows", "Huntsman Knife_Honor Fade", "Huntsman Knife_Marbleized",
+    "Huntsman Knife_Monster", "Huntsman Knife_Naval", "Huntsman Knife_Ruby",
+    "Huntsman Knife_Splattered", "Huntsman Knife_Stock", "Huntsman Knife_Tropical",
+    "Huntsman Knife_Twitch", "Huntsman Knife_Wetland", "Huntsman Knife_Worn",
+    "Huntsman Knife_Wrapped",
+    "Karambit_Bloodwidow", "Karambit_Consumed", "Karambit_Cosmos", "Karambit_Crimson Tiger",
+    "Karambit_Crippled Fade", "Karambit_Death Wish", "Karambit_Digital", "Karambit_Egg Shell",
+    "Karambit_Festive", "Karambit_Frozen Dream", "Karambit_Glossed", "Karambit_Gold",
+    "Karambit_Goo", "Karambit_Hallows", "Karambit_Jade Dream", "Karambit_Jester",
+    "Karambit_Lantern", "Karambit_Liberty Camo", "Karambit_Marbleized", "Karambit_Naval",
+    "Karambit_Neonic", "Karambit_Pizza", "Karambit_Quicktime", "Karambit_Racer",
+    "Karambit_Ruby", "Karambit_Scapter", "Karambit_Splattered", "Karambit_Stock",
+    "Karambit_Topaz", "Karambit_Tropical", "Karambit_Twitch", "Karambit_Wetland",
+    "Karambit_Worn",
+    "Sickle_Mummy", "Sickle_Splattered", "Sickle_Stock",
 }
 
 local function isKnifeName(name)
@@ -1237,199 +1323,156 @@ local function isKnifeName(name)
     return false
 end
 
-local SKIN_ROOTS = { "Skins", "SkinList", "SkinAssets", "SkinData", "KnifeSkins", "WeaponSkins", "Weapons" }
-
-local function findSkinRoot()
-    for _, n in ipairs(SKIN_ROOTS) do
-        local f = ReplicatedStorage:FindFirstChild(n, true)
-        if f and #f:GetChildren() > 0 then return f end
-    end
-    for _, d in ipairs(ReplicatedStorage:GetDescendants()) do
-        if d:IsA("Folder") or d:IsA("Model") then
-            local kids = d:GetChildren()
-            if #kids >= 2 then
-                local hits = 0
-                for _, c in ipairs(kids) do
-                    if isKnifeName(c.Name) then hits += 1 end
-                end
-                if hits >= 2 then return d end
-            end
-        end
-    end
-    return nil
+local function getSkinFolders()
+    local sf = lp:FindFirstChild("SkinFolder")
+    if not sf then return nil, nil end
+    return sf:FindFirstChild("TFolder"), sf:FindFirstChild("CTFolder")
 end
 
-local function extractVisuals(inst)
-    local meshId, textureId
-    local function scan(part)
-        if part:IsA("MeshPart") then
-            if meshId == nil and part.MeshId ~= "" then meshId = part.MeshId end
-            if textureId == nil and part.TextureID ~= "" then textureId = part.TextureID end
-        end
-        local sm = part:FindFirstChildOfClass("SpecialMesh")
-        if sm then
-            if meshId == nil and sm.MeshId ~= "" then meshId = sm.MeshId end
-            if textureId == nil and sm.TextureId ~= "" then textureId = sm.TextureId end
-        end
-        local dec = part:FindFirstChildOfClass("Decal")
-        if dec and textureId == nil and dec.Texture ~= "" then textureId = dec.Texture end
-        local tex = part:FindFirstChildOfClass("Texture")
-        if tex and textureId == nil and tex.Texture ~= "" then textureId = tex.Texture end
-    end
-    if inst:IsA("BasePart") then scan(inst) end
-    for _, d in ipairs(inst:GetDescendants()) do
-        if d:IsA("BasePart") then scan(d) end
-        if meshId and textureId then break end
-    end
-    return meshId, textureId
+local function folderList()
+    local out = {}
+    local t, ct = getSkinFolders()
+    if t then out[#out + 1] = t end
+    if ct then out[#out + 1] = ct end
+    return out
 end
 
-local function buildCatalog()
-    SKIN.catalog = {}
-    local root = findSkinRoot()
-    if not root then
-        SKIN.ready = false
-        return false
+local function splitSkin(line)
+    local weapon, skin = string.match(tostring(line), "^(.-)_(.+)$")
+    return weapon, skin
+end
+
+local function addSkin(weapon, skin)
+    if not weapon or not skin or skin == "" then return end
+    if not isKnifeName(weapon) then return end
+    SKIN.pool[weapon] = SKIN.pool[weapon] or {}
+    SKIN.pool[weapon][skin] = true
+end
+
+local function buildPool()
+    SKIN.pool = {}
+
+    for _, line in ipairs(FALLBACK) do
+        addSkin(splitSkin(line))
     end
-    for _, weapon in ipairs(root:GetChildren()) do
-        if isKnifeName(weapon.Name) and (weapon:IsA("Folder") or weapon:IsA("Model") or weapon:IsA("Configuration")) then
-            local list = {}
-            for _, sk in ipairs(weapon:GetChildren()) do
-                local meshId, tex = extractVisuals(sk)
-                if meshId or tex then
-                    list[#list + 1] = { name = sk.Name, meshId = meshId, textureId = tex }
+
+    -- инвентарь игрока
+    pcall(function()
+        local pg = lp:FindFirstChild("PlayerGui")
+        local cl = pg and pg:FindFirstChild("Client")
+        if not cl then return end
+        local env = getsenv(cl)
+        local inv = env and env.CurrentInventory
+        if type(inv) ~= "table" then return end
+        for _, entry in ipairs(inv) do
+            local n = (type(entry) == "table" and entry[1]) or (type(entry) == "string" and entry)
+            if type(n) == "string" then addSkin(splitSkin(n)) end
+        end
+    end)
+
+    -- модули со списками скинов
+    pcall(function()
+        for _, d in ipairs(ReplicatedStorage:GetDescendants()) do
+            if d:IsA("ModuleScript") and string.find(string.lower(d.Name), "skin", 1, true) then
+                local ok, src = pcall(function() return d.Source end)
+                if ok and type(src) == "string" then
+                    for quoted in string.gmatch(src, '"[^"]+"') do
+                        addSkin(splitSkin(string.sub(quoted, 2, -2)))
+                    end
                 end
             end
-            if #list > 0 then
-                table.sort(list, function(a, b) return a.name < b.name end)
-                local byName = {}
-                for _, s in ipairs(list) do byName[s.name] = s end
-                SKIN.catalog[weapon.Name] = { skins = list, byName = byName }
+        end
+    end)
+
+    -- стволы, которые реально есть в SkinFolder
+    for _, f in ipairs(folderList()) do
+        for _, v in ipairs(f:GetChildren()) do
+            if isKnifeName(v.Name) then
+                SKIN.pool[v.Name] = SKIN.pool[v.Name] or {}
+                SKIN.pool[v.Name]["Stock"] = true
             end
         end
     end
-    SKIN.ready = next(SKIN.catalog) ~= nil
-    return SKIN.ready
 end
 
 local function getEquippedKnife()
     local char = lp.Character
     if not char then return nil end
     for _, t in ipairs(char:GetChildren()) do
-        if t:IsA("Tool") then
-            local attr = t:GetAttribute("WeaponType") or t:GetAttribute("Type")
-            if isKnifeName(t.Name) or (type(attr) == "string" and isKnifeName(attr)) then
-                return t
-            end
-        end
+        if t:IsA("Tool") and isKnifeName(t.Name) then return t end
     end
     return nil
 end
 
-local function snapshot(tool)
-    if SKIN.applied[tool] then return end
-    local handle = tool:FindFirstChild("Handle")
-    if not handle then return end
-    local sm = handle:FindFirstChildOfClass("SpecialMesh")
-    local dec = handle:FindFirstChildOfClass("Decal")
-    SKIN.applied[tool] = {
-        isMeshPart = handle:IsA("MeshPart"),
-        meshId     = (handle:IsA("MeshPart") and handle.MeshId) or (sm and sm.MeshId) or "",
-        textureId  = (handle:IsA("MeshPart") and handle.TextureID) or (sm and sm.TextureId) or "",
-        decal      = dec and dec.Texture or nil,
-        hadMesh    = sm ~= nil,
-    }
+local reequipping = false
+
+local function reequip()
+    if reequipping then return end
+    local hum = curHum
+    local tool = getEquippedKnife()
+    if not hum or not tool then return end
+    reequipping = true
+    pcall(function() hum:UnequipTools() end)
+    task.delay(0.2, function()
+        if tool.Parent and hum and hum.Parent then
+            pcall(function() hum:EquipTool(tool) end)
+        end
+        task.delay(0.4, function() reequipping = false end)
+    end)
 end
 
-local function applyTo(tool)
-    if not tool or not SKIN.knife or not SKIN.skin then return false end
-    local entry = SKIN.catalog[SKIN.knife]
-    if not entry then return false end
-    local skin = entry.byName[SKIN.skin]
-    if not skin then return false end
-    local handle = tool:FindFirstChild("Handle")
-    if not (handle and handle:IsA("BasePart")) then return false end
-
-    snapshot(tool)
-
-    if handle:IsA("MeshPart") then
-        if skin.meshId and skin.meshId ~= "" then pcall(function() handle.MeshId = skin.meshId end) end
-        if skin.textureId then pcall(function() handle.TextureID = skin.textureId end) end
-    else
-        local sm = handle:FindFirstChildOfClass("SpecialMesh")
-        if not sm then
-            sm = new("SpecialMesh", { MeshType = Enum.MeshType.FileMesh }, handle)
+local function setSkin(weapon, skin)
+    if not weapon or not skin then return false end
+    local hit = 0
+    for _, f in ipairs(folderList()) do
+        local v = f:FindFirstChild(weapon)
+        if v and v:IsA("StringValue") then
+            SKIN.saved[weapon] = SKIN.saved[weapon] or {}
+            if SKIN.saved[weapon][f.Name] == nil then
+                SKIN.saved[weapon][f.Name] = v.Value
+            end
+            pcall(function() v.Value = skin end)
+            hit += 1
         end
-        if skin.meshId and skin.meshId ~= "" then pcall(function() sm.MeshId = skin.meshId end) end
-        if skin.textureId then pcall(function() sm.TextureId = skin.textureId end) end
     end
-
-    local dec = handle:FindFirstChildOfClass("Decal")
-    if dec and skin.textureId then pcall(function() dec.Texture = skin.textureId end) end
-    return true
+    return hit > 0
 end
 
-local function restoreTool(tool)
-    local s = SKIN.applied[tool]
-    if not s then return end
-    SKIN.applied[tool] = nil
-    local handle = tool.Parent and tool:FindFirstChild("Handle")
-    if not handle then return end
-    if s.isMeshPart and handle:IsA("MeshPart") then
-        pcall(function() handle.MeshId = s.meshId; handle.TextureID = s.textureId end)
-    else
-        local sm = handle:FindFirstChildOfClass("SpecialMesh")
-        if sm then
-            pcall(function() sm.MeshId = s.meshId; sm.TextureId = s.textureId end)
-            if not s.hadMesh then sm:Destroy() end
-        end
-    end
-    if s.decal then
-        local dec = handle:FindFirstChildOfClass("Decal")
-        if dec then pcall(function() dec.Texture = s.decal end) end
+local function restoreWeapon(weapon)
+    local saved = SKIN.saved[weapon]
+    if not saved then return end
+    SKIN.saved[weapon] = nil
+    for _, f in ipairs(folderList()) do
+        local v = f:FindFirstChild(weapon)
+        local old = v and saved[f.Name]
+        if v and old then pcall(function() v.Value = old end) end
     end
 end
 
 local function restoreAll()
-    for tool in pairs(SKIN.applied) do pcall(restoreTool, tool) end
-    SKIN.applied = {}
+    local weapons = {}
+    for weapon in pairs(SKIN.saved) do weapons[#weapons + 1] = weapon end
+    for _, weapon in ipairs(weapons) do pcall(restoreWeapon, weapon) end
 end
 
-local function refreshCurrent()
-    local t = getEquippedKnife()
-    if t then applyTo(t) end
+local function apply()
+    if not SKIN.knife or not SKIN.skin then return false end
+    if not setSkin(SKIN.knife, SKIN.skin) then return false end
+    reequip()
+    return true
 end
 
 track(lp.CharacterAdded:Connect(function(char)
-    task.delay(0.5, function()
-        if SKIN.enabled and SKIN.autoApply then refreshCurrent() end
-    end)
     track(char.ChildAdded:Connect(function(c)
         if c:IsA("Tool") and isKnifeName(c.Name) and SKIN.enabled and SKIN.autoApply then
-            task.delay(0.15, function()
-                if c.Parent then applyTo(c) end
+            task.delay(0.3, function()
+                if not (SKIN.knife and SKIN.skin) then return end
+                setSkin(SKIN.knife, SKIN.skin)
+                if SKIN.knife == c.Name then reequip() end
             end)
         end
     end))
 end))
-
--- сторож: игра любит сбрасывать меш сама
-task.spawn(function()
-    while not SKIN.dead do
-        task.wait(0.75)
-        if not (SKIN.enabled and SKIN.autoApply) then continue end
-        local t = getEquippedKnife()
-        if not t then continue end
-        local entry = SKIN.knife and SKIN.catalog[SKIN.knife]
-        local skin = entry and SKIN.skin and entry.byName[SKIN.skin]
-        if not skin then continue end
-        local handle = t:FindFirstChild("Handle")
-        if not handle then continue end
-        local sm = handle:FindFirstChildOfClass("SpecialMesh")
-        local cur = (sm and sm.MeshId) or (handle:IsA("MeshPart") and handle.MeshId)
-        if skin.meshId and cur ~= skin.meshId then applyTo(t) end
-    end
-end)
 
 --==============================================================
 --  ОКНО СТАТИСТИКИ
@@ -1801,12 +1844,13 @@ section(skinPage, "скинченджер")
 toggle(skinPage, "Включить скинченджер", false, function(v)
     SKIN.enabled = v
     if v then
-        if not SKIN.ready then buildCatalog() end
-        if not SKIN.ready then
-            notify("Скины не найдены — жми «Обновить»")
+        if next(SKIN.pool) == nil then buildPool() end
+        if apply() then
+            notify("Скин применён: " .. SKIN.knife .. " | " .. SKIN.skin)
+        elseif SKIN.knife and SKIN.skin then
+            notify("Не нашёл ствол в SkinFolder")
         else
-            local t = getEquippedKnife()
-            if t and SKIN.knife and SKIN.skin then applyTo(t) else notify("Возьми нож в руки") end
+            notify("Выбери нож и скин")
         end
     else
         restoreAll()
@@ -1847,14 +1891,16 @@ local rebuildSkins
 local function rebuildKnives()
     clearHolder(knifeHolder)
     local items = {}
-    for name, entry in pairs(SKIN.catalog) do
-        items[#items + 1] = { name = string.format("%s (%d)", name, #entry.skins), value = name }
+    for name, skins in pairs(SKIN.pool) do
+        local count = 0
+        for _ in pairs(skins) do count += 1 end
+        items[#items + 1] = { name = string.format("%s (%d)", name, count), value = name }
     end
     table.sort(items, function(a, b) return a.name < b.name end)
     skinStatus.Text = string.format("Ножи: %d", #items)
     if #items == 0 then
         new("TextLabel", {
-            Text = "Список пуст — нажми «Обновить список»",
+            Text = "Пусто — жми «Диагностика»",
             Font = Enum.Font.Gotham, TextSize = 11,
             TextColor3 = Color3.fromRGB(150, 150, 168),
             BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 16),
@@ -1866,14 +1912,14 @@ local function rebuildKnives()
         SKIN.knife = v
         SKIN.skin = nil
         rebuildSkins()
-        if SKIN.enabled then refreshCurrent() end
+        if SKIN.enabled and SKIN.skin then apply() end
     end, 3)
 end
 
 function rebuildSkins()
     clearHolder(skinHolder)
-    local entry = SKIN.knife and SKIN.catalog[SKIN.knife]
-    if not entry then
+    local skins = SKIN.knife and SKIN.pool[SKIN.knife]
+    if not skins then
         new("TextLabel", {
             Text = "Сначала выбери нож",
             Font = Enum.Font.Gotham, TextSize = 11,
@@ -1884,57 +1930,96 @@ function rebuildSkins()
         return
     end
     local items = {}
-    for _, s in ipairs(entry.skins) do items[#items + 1] = { name = s.name, value = s.name } end
+    for skin in pairs(skins) do items[#items + 1] = { name = skin, value = skin } end
+    table.sort(items, function(a, b) return a.name < b.name end)
     chips(skinHolder, items, SKIN.skin, function(v)
         SKIN.skin = v
-        if not getEquippedKnife() then
-            notify("Возьми нож в руки")
+        if not SKIN.enabled then
+            notify("Включи скинченджер")
             return
         end
-        refreshCurrent()
+        if apply() then
+            notify(SKIN.knife .. " | " .. v)
+        else
+            notify("Ствол не найден в SkinFolder")
+        end
     end, 3)
 end
 
+section(skinPage, "ручной ввод")
+local manualBox = textbox(skinPage, "суффикс скина, напр. Doppler", function(text)
+    text = string.gsub(text or "", "^%s*(.-)%s*$", "%1")
+    if text == "" or not SKIN.knife then
+        notify("Выбери нож и впиши скин")
+        return
+    end
+    SKIN.skin = text
+    SKIN.enabled = true
+    if apply() then
+        notify(SKIN.knife .. " | " .. text)
+    else
+        notify("Ствол не найден в SkinFolder")
+    end
+end)
+
 section(skinPage, "действия")
 button(skinPage, "Применить", function()
-    local t = getEquippedKnife()
-    if not t then notify("Возьми нож в руки") return end
     if not SKIN.knife or not SKIN.skin then notify("Выбери нож и скин") return end
     SKIN.enabled = true
-    if applyTo(t) then
+    if apply() then
         notify(SKIN.knife .. " | " .. SKIN.skin)
     else
-        notify("Не удалось применить")
+        notify("Ствол не найден в SkinFolder")
     end
 end)
 button(skinPage, "Снять скин", function()
     restoreAll()
+    reequip()
     notify("Скин снят")
 end)
 button(skinPage, "Обновить список", function()
-    if buildCatalog() then
-        rebuildKnives()
-        rebuildSkins()
-        notify(string.format("Найдено ножей: %d", #knifeHolder:GetChildren() > 0 and 0 or 0))
-        local n = 0
-        for _ in pairs(SKIN.catalog) do n += 1 end
-        notify("Найдено ножей: " .. n)
-    else
-        rebuildKnives()
-        notify("Ничего не найдено")
+    buildPool()
+    rebuildKnives()
+    rebuildSkins()
+    local n = 0
+    for _ in pairs(SKIN.pool) do n += 1 end
+    notify("Ножей: " .. n)
+end)
+button(skinPage, "Диагностика", function()
+    local sf = lp:FindFirstChild("SkinFolder")
+    if not sf then
+        local names = {}
+        for _, c in ipairs(lp:GetChildren()) do names[#names + 1] = c.Name end
+        logFile("SkinFolder нет. lp: " .. table.concat(names, ", "))
+        notify("Нет SkinFolder (лог)")
+        return
     end
+    local t, ct = getSkinFolders()
+    local items = 0
+    local sample = {}
+    for _, f in ipairs(folderList()) do
+        items += #f:GetChildren()
+        for i, c in ipairs(f:GetChildren()) do
+            if i <= 10 then
+                sample[#sample + 1] = string.format("%s(%s)=%s", c.Name, c.ClassName,
+                    tostring(c:IsA("StringValue") and c.Value))
+            end
+        end
+    end
+    logFile(string.format("SkinFolder T=%s CT=%s items=%d", tostring(t ~= nil), tostring(ct ~= nil), items))
+    logFile("sample: " .. table.concat(sample, " | "))
+    notify(string.format("T=%s CT=%s, предметов %d (лог)", tostring(t ~= nil), tostring(ct ~= nil), items))
 end)
 
 task.spawn(function()
-    for _ = 1, 10 do
+    for _ = 1, 15 do
         if SKIN.dead then return end
-        if buildCatalog() then break end
+        if getSkinFolders() then break end
         task.wait(1)
     end
-    if SKIN.ready then
-        rebuildKnives()
-        rebuildSkins()
-    end
+    buildPool()
+    rebuildKnives()
+    rebuildSkins()
 end)
 
 section(watchPage, "наблюдение")
