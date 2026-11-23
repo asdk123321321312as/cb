@@ -1,4 +1,15 @@
-
+--!nocheck
+--[[
+    SleepScript • Counter Blox (Rolve)  v3.7
+    ---------------------------------------------------------------
+    ESP (реальное время), бхоп, no air spread, фиксация FOV,
+    окно статистики, FPS boost, автобан, скинченджер ножей.
+    v3.3: земля определяется рейкастом — бхоп не улетает в небо.
+    v3.4: скинченджер.
+    v3.5: скинченджер через lp.SkinFolder (TFolder/CTFolder).
+    v3.6: ключи берутся из SkinFolder, нечёткий поиск, дамп структуры.
+    v3.7: исправлен порядок функций, страница всегда отрисовывается.
+]]
 
 local CONFIG = {
     ScriptURL   = "",
@@ -7,7 +18,7 @@ local CONFIG = {
     Keybind     = Enum.KeyCode.RightShift,
     DetectGrace = 20,
     LogOnly     = false,
-    Version     = "3.6",
+    Version     = "3.7",
 }
 
 if getgenv().SleepScript then pcall(function() getgenv().SleepScript.Unload() end) end
@@ -641,9 +652,7 @@ local function dumpBox(parent, height)
         BackgroundColor3 = Color3.fromRGB(14, 14, 19),
         BorderSizePixel = 0,
         ClearTextOnFocus = false,
-        TextEditable = false,
         MultiLine = true,
-        TextWrapped = false,
         TextXAlignment = Enum.TextXAlignment.Left,
         TextYAlignment = Enum.TextYAlignment.Top,
         Size = UDim2.new(1, 0, 0, height or 150),
@@ -1334,6 +1343,16 @@ local function isKnifeName(name)
     return false
 end
 
+-- ВАЖНО: объявлено до всех функций, которые его используют
+local function getEquippedKnife()
+    local char = lp.Character
+    if not char then return nil end
+    for _, t in ipairs(char:GetChildren()) do
+        if t:IsA("Tool") and isKnifeName(t.Name) then return t end
+    end
+    return nil
+end
+
 -- все папки внутри SkinFolder (T/CT или любые другие)
 local function skinFolders()
     local out = {}
@@ -1412,15 +1431,6 @@ local function mergedSkins()
         for s in pairs(skins) do out[s] = true end
     end
     return out
-end
-
-local function getEquippedKnife()
-    local char = lp.Character
-    if not char then return nil end
-    for _, t in ipairs(char:GetChildren()) do
-        if t:IsA("Tool") and isKnifeName(t.Name) then return t end
-    end
-    return nil
 end
 
 -- поиск объекта значения: точное имя, регистр, вложенность, нечёткое совпадение
@@ -1968,7 +1978,7 @@ local skinHolder = new("Frame", {
 }, skinPage)
 
 local skinStatus = new("TextLabel", {
-    Text = "—",
+    Text = "Загрузка…",
     Font = Enum.Font.Gotham,
     TextSize = 11,
     TextColor3 = Color3.fromRGB(130, 130, 148),
@@ -1983,6 +1993,16 @@ end
 
 local rebuildSkins
 
+local function hint(parent, text, color)
+    new("TextLabel", {
+        Text = text,
+        Font = Enum.Font.Gotham, TextSize = 11,
+        TextColor3 = color or Color3.fromRGB(150, 150, 168),
+        BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 16),
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, parent)
+end
+
 local function rebuildKnives()
     clearHolder(knifeHolder)
     local items = {}
@@ -1990,15 +2010,9 @@ local function rebuildKnives()
         items[#items + 1] = { name = name, value = name }
     end
     table.sort(items, function(a, b) return a.name < b.name end)
-    skinStatus.Text = string.format("В SkinFolder ножей: %d", #items)
+    skinStatus.Text = string.format("Ножей в SkinFolder: %d", #items)
     if #items == 0 then
-        new("TextLabel", {
-            Text = "В SkinFolder нет ножей — жми «Дамп структуры»",
-            Font = Enum.Font.Gotham, TextSize = 11,
-            TextColor3 = Color3.fromRGB(150, 150, 168),
-            BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 16),
-            TextXAlignment = Enum.TextXAlignment.Left,
-        }, knifeHolder)
+        hint(knifeHolder, "В SkinFolder нет ножей — жми «Дамп структуры»", Color3.fromRGB(240, 200, 90))
         return
     end
     chips(knifeHolder, items, SKIN.knife, function(v)
@@ -2011,17 +2025,11 @@ end
 
 function rebuildSkins()
     clearHolder(skinHolder)
-    local skins = SKIN.knife and SKIN.pool[SKIN.knife]
     if not SKIN.knife then
-        new("TextLabel", {
-            Text = "Сначала выбери нож",
-            Font = Enum.Font.Gotham, TextSize = 11,
-            TextColor3 = Color3.fromRGB(150, 150, 168),
-            BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 16),
-            TextXAlignment = Enum.TextXAlignment.Left,
-        }, skinHolder)
+        hint(skinHolder, "Сначала выбери нож")
         return
     end
+    local skins = SKIN.pool[SKIN.knife]
     local loose = false
     if not skins then
         skins = mergedSkins()
@@ -2031,13 +2039,11 @@ function rebuildSkins()
     for skin in pairs(skins) do items[#items + 1] = { name = skin, value = skin } end
     table.sort(items, function(a, b) return a.name < b.name end)
     if loose then
-        new("TextLabel", {
-            Text = "Точного списка нет — показан общий набор",
-            Font = Enum.Font.Gotham, TextSize = 10,
-            TextColor3 = Color3.fromRGB(240, 200, 90),
-            BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 14),
-            TextXAlignment = Enum.TextXAlignment.Left,
-        }, skinHolder)
+        hint(skinHolder, "Точного списка нет — показан общий набор", Color3.fromRGB(240, 200, 90))
+    end
+    if #items == 0 then
+        hint(skinHolder, "Список скинов пуст — впиши вручную ниже")
+        return
     end
     chips(skinHolder, items, SKIN.skin, function(v)
         SKIN.skin = v
@@ -2051,6 +2057,18 @@ function rebuildSkins()
             notify("Ствол не найден в SkinFolder")
         end
     end, 3)
+end
+
+local function refresh()
+    local ok, err = pcall(function()
+        buildPool()
+        rebuildKnives()
+        rebuildSkins()
+    end)
+    if not ok then
+        skinStatus.Text = "Ошибка: " .. tostring(err)
+        logFile("skin refresh error: " .. tostring(err))
+    end
 end
 
 section(skinPage, "ручной ввод")
@@ -2085,9 +2103,7 @@ button(skinPage, "Снять скин", function()
     notify("Скин снят")
 end)
 button(skinPage, "Обновить список", function()
-    buildPool()
-    rebuildKnives()
-    rebuildSkins()
+    refresh()
     notify("Обновлено")
 end)
 
@@ -2100,16 +2116,22 @@ button(skinPage, "Дамп структуры", function()
     notify("Дамп готов (в поле и в логе)")
 end)
 
+refresh()
+
 task.spawn(function()
-    for _ = 1, 15 do
+    for _ = 1, 40 do
         if SKIN.dead then return end
         if lp:FindFirstChild("SkinFolder") then break end
         task.wait(1)
     end
-    buildPool()
-    rebuildKnives()
-    rebuildSkins()
+    refresh()
 end)
+
+track(lp.ChildAdded:Connect(function(c)
+    if c.Name == "SkinFolder" then
+        task.delay(0.6, refresh)
+    end
+end))
 
 section(watchPage, "наблюдение")
 toggle(watchPage, "Следить за RAC", true, function(v) S.watchEnabled = v end)
