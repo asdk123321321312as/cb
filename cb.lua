@@ -1,11 +1,3 @@
---!nocheck
---[[
-    SleepScript • Counter Blox (Rolve)  v3.1
-    ---------------------------------------------------------------
-    ESP, бхоп, no air spread, фиксация FOV,
-    окно статистики, FPS boost, автобан.
-    v3.1: no-spread снова дружит с бхопом (форс Running + тик каждый кадр).
-]]
 
 local CONFIG = {
     ScriptURL   = "",
@@ -14,7 +6,7 @@ local CONFIG = {
     Keybind     = Enum.KeyCode.RightShift,
     DetectGrace = 20,
     LogOnly     = false,
-    Version     = "3.1",
+    Version     = "3.2",
 }
 
 if getgenv().SleepScript then pcall(function() getgenv().SleepScript.Unload() end) end
@@ -46,8 +38,6 @@ local S = {
     style        = "corner",
     thickness    = 1,
     cornerSize   = 9,
-    fill         = false,
-    fillAlpha    = 0.85,
     textSize     = 13,
     nameMode     = "name",
     showDist     = true,
@@ -56,7 +46,6 @@ local S = {
     hpSide       = "left",
     skeleton     = false,
     tracer       = false,
-    offscreen    = false,
 
     colorMode    = "static",
     colorStatic  = Color3.fromRGB(235, 235, 245),
@@ -66,7 +55,6 @@ local S = {
     teamCheck    = true,
     showLocal    = false,
     maxDist      = 600,
-    adaptive     = true,
 
     bhop         = false,
     bhopAggro    = false,
@@ -145,8 +133,19 @@ local function realFloor(hum)
     return nil
 end
 
+-- при включённом разбросе читаем через хуки: в воздухе они отдают Running/Plastic,
+-- поэтому бхоп видит "землю" и продолжает работать
 local function isAirborne(hum)
     if not hum or hum.Health <= 0 then return false end
+    if S.noAirSpread then
+        local ok, st = pcall(function() return hum:GetState() end)
+        if ok and (st == Enum.HumanoidStateType.Freefall or st == Enum.HumanoidStateType.Jumping) then
+            return true
+        end
+        local ok2, mat = pcall(function() return hum.FloorMaterial end)
+        if ok2 then return mat == Enum.Material.Air end
+        return false
+    end
     local st = realState(hum)
     if st == Enum.HumanoidStateType.Freefall or st == Enum.HumanoidStateType.Jumping then
         return true
@@ -206,7 +205,6 @@ local gui = new("ScreenGui", {
     DisplayOrder = 9999,
 }, gethui())
 
--- тень / свечение
 local glow = new("Frame", {
     Size = UDim2.fromOffset(508, 372),
     Position = UDim2.new(0.5, -254, 0.5, -186),
@@ -234,7 +232,6 @@ track(main:GetPropertyChangedSignal("Visible"):Connect(function()
     glow.Visible = main.Visible
 end))
 
--- открытие
 main.BackgroundTransparency = 1
 task.spawn(function()
     tw(mainScale, 0.3, { Scale = 1 }, Enum.EasingStyle.Back)
@@ -346,7 +343,6 @@ headerButton(-32, "×", function()
     if getgenv().SleepScript then getgenv().SleepScript.Unload() end
 end)
 
--- перетаскивание
 local function makeDraggable(frame, handle)
     local dragging, dragStart, startPos
     track(handle.InputBegan:Connect(function(input)
@@ -671,18 +667,16 @@ local function sq(filled)
 end
 
 local function newRec()
-    local rec = { all = {}, bones = {}, corners = {}, cross = {} }
+    local rec = { all = {}, corners = {}, cross = {}, bones = {} }
     local function add(o) rec.all[#rec.all + 1] = o return o end
 
     rec.box = add(sq(false))
-    rec.fill = add(sq(true))
     rec.hpBg = add(sq(true))
     rec.hp = add(sq(true))
     rec.name = add(Drawing.new("Text"))
     rec.dist = add(Drawing.new("Text"))
     rec.hpText = add(Drawing.new("Text"))
     rec.tracer = add(Drawing.new("Line"))
-    rec.off = add(Drawing.new("Circle"))
 
     for _, t in ipairs({ rec.name, rec.dist, rec.hpText }) do
         t.Center = true
@@ -691,9 +685,6 @@ local function newRec()
         t.OutlineColor = Color3.fromRGB(0, 0, 0)
     end
     rec.tracer.Thickness = 1
-    rec.fill.Transparency = 0.85
-    rec.off.Thickness = 2
-    rec.off.Filled = false
     for i = 1, 8 do rec.corners[i] = add(sq(false)) end
     for i = 1, 4 do rec.cross[i] = add(sq(false)) end
     for i = 1, 15 do
@@ -706,9 +697,7 @@ end
 
 local function hide(rec)
     rec.box.Filled = false
-    for _, o in ipairs(rec.all) do
-        pcall(function() o.Visible = false end)
-    end
+    for i = 1, #rec.all do rec.all[i].Visible = false end
 end
 
 local BONES = {
@@ -727,16 +716,24 @@ local BONES = {
 
 local function bindPlayer(player)
     if ESP.objects[player] then return end
-    local entry = { rec = newRec(), char = nil }
+    local entry = { rec = newRec(), char = nil, bones = nil }
     ESP.objects[player] = entry
 
     local function onChar(char)
         entry.char = char
+        entry.head = nil
+        entry.hum = nil
+        entry.root = nil
+        entry.bones = nil
     end
     if player.Character then onChar(player.Character) end
     track(player.CharacterAdded:Connect(onChar))
     track(player.CharacterRemoving:Connect(function()
         entry.char = nil
+        entry.head = nil
+        entry.hum = nil
+        entry.root = nil
+        entry.bones = nil
         hide(entry.rec)
     end))
 end
@@ -754,9 +751,7 @@ track(Players.PlayerRemoving:Connect(unbindPlayer))
 
 local rayParams = RaycastParams.new()
 rayParams.IgnoreWater = true
-
 local visState, visClock = {}, {}
-local lastInterval, fpsSmooth = 1 / 60, 60
 
 local function colorFor(player, visible, frac, dist)
     if not visible then return S.colorHidden end
@@ -813,34 +808,54 @@ local function drawBox(rec, x, y, w, h, col)
     rec.box.Filled = false
 end
 
-local function frameUpdate(dt)
+-- части и кости кэшируются на персонажа, чтобы не искать их каждый кадр
+local function resolveParts(entry)
+    local char = entry.char
+    if not char or not char.Parent then return nil end
+
+    local head, hum, root = entry.head, entry.hum, entry.root
+    if not head or head.Parent ~= char then head = char:FindFirstChild("Head") end
+    if not hum or hum.Parent ~= char then hum = char:FindFirstChildOfClass("Humanoid") end
+    if not root or root.Parent ~= char then root = char:FindFirstChild("HumanoidRootPart") end
+    entry.head, entry.hum, entry.root = head, hum, root
+    if not (head and hum and root) then return nil end
+
+    if not entry.bones then
+        local list = BONES[hum.RigType]
+        local out = {}
+        if list then
+            for i = 1, #list do
+                local a = char:FindFirstChild(list[i][1])
+                local b = char:FindFirstChild(list[i][2])
+                if a and b then out[#out + 1] = { a, b } end
+            end
+        end
+        entry.bones = out
+    end
+
+    return head, hum, root
+end
+
+local function frameUpdate()
     if not S.espEnabled or not hasDrawing then return end
     local cam = camera or Workspace.CurrentCamera
     if not cam then return end
 
-    fpsSmooth = fpsSmooth * 0.9 + (1 / math.max(dt, 0.001)) * 0.1
-    local base = 1 / 60
-    if S.adaptive and fpsSmooth < 45 then base = 1 / 30 end
-    lastInterval = base * (0.92 + math.random() * 0.16)
-
-    local now = os.clock()
     local camPos = cam.CFrame.Position
     local vp = cam.ViewportSize
     local cx, cy = vp.X / 2, vp.Y / 2
     local myChar = lp.Character
+    local now = os.clock()
 
     for player, entry in pairs(ESP.objects) do
         local rec = entry.rec
-        local char = entry.char
 
-        if not char or not char.Parent or (player == lp and not S.showLocal) then
+        if player == lp and not S.showLocal then
             hide(rec)
             continue
         end
 
-        local head = char:FindFirstChild("Head")
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        local root = char:FindFirstChild("HumanoidRootPart")
+        local head, hum, root = resolveParts(entry)
 
         if not head or not hum or not root or hum.Health <= 0 then
             hide(rec)
@@ -850,30 +865,17 @@ local function frameUpdate(dt)
         local headPos = head.Position
         local dist = (camPos - headPos).Magnitude
 
-        if dist > S.maxDist then
-            hide(rec)
-            continue
-        end
-
-        if S.teamCheck and player ~= lp and player.Team and lp.Team and player.Team == lp.Team then
+        if dist > S.maxDist
+            or (S.teamCheck and player ~= lp and player.Team and lp.Team and player.Team == lp.Team) then
             hide(rec)
             continue
         end
 
         local sTop, onTop = cam:WorldToViewportPoint(headPos + Vector3.new(0, 0.9, 0))
         local sBot, onBot = cam:WorldToViewportPoint(root.Position - Vector3.new(0, 2.4, 0))
-        local onScreen = onTop and onBot and sTop.Z > 0 and sBot.Z > 0 and sBot.Y > sTop.Y
 
-        if not onScreen then
+        if not (onTop and onBot) or sTop.Z <= 0 or sBot.Z <= 0 or sBot.Y <= sTop.Y then
             hide(rec)
-            if S.offscreen and sTop.Z > 0 then
-                local ox = math.clamp(sTop.X, 30, vp.X - 30)
-                local oy = math.clamp(sTop.Y, 30, vp.Y - 30)
-                rec.off.Position = Vector2.new(ox, oy)
-                rec.off.Radius = 7
-                rec.off.Color = S.colorStatic
-                rec.off.Visible = true
-            end
             continue
         end
 
@@ -882,27 +884,17 @@ local function frameUpdate(dt)
         local x = sTop.X - w / 2
         local y = sTop.Y
 
-        if not visClock[player] or now - visClock[player] > 0.15 then
+        if not visClock[player] or now - visClock[player] > 0.12 then
             visClock[player] = now
-            rayParams.FilterDescendantsInstances = { char, myChar }
+            rayParams.FilterDescendantsInstances = { entry.char, myChar }
             local hit = Workspace:Raycast(camPos, headPos - camPos, rayParams)
-            visState[player] = (hit == nil or hit.Instance:IsDescendantOf(char))
+            visState[player] = (hit == nil or hit.Instance:IsDescendantOf(entry.char))
         end
 
         local frac = math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
         local col = colorFor(player, visState[player] ~= false, frac, dist)
 
         drawBox(rec, x, y, w, h, col)
-
-        if S.fill and S.style == "full" then
-            rec.fill.Color = col
-            rec.fill.Transparency = S.fillAlpha
-            rec.fill.Position = Vector2.new(x, y)
-            rec.fill.Size = Vector2.new(w, h)
-            rec.fill.Visible = true
-        else
-            rec.fill.Visible = false
-        end
 
         if S.hpMode == "bar" then
             local hx = (S.hpSide == "left") and (x - 6) or (x + w + 3)
@@ -971,42 +963,33 @@ local function frameUpdate(dt)
             rec.tracer.Visible = false
         end
 
-        if S.skeleton then
-            local list = BONES[hum.RigType]
-            if list then
-                for i, pairParts in ipairs(list) do
-                    local a = char:FindFirstChild(pairParts[1])
-                    local b = char:FindFirstChild(pairParts[2])
-                    local line = rec.bones[i]
-                    if a and b and line then
-                        local pa = cam:WorldToViewportPoint(a.Position)
-                        local pb = cam:WorldToViewportPoint(b.Position)
-                        line.From = Vector2.new(pa.X, pa.Y)
-                        line.To = Vector2.new(pb.X, pb.Y)
-                        line.Color = col
-                        line.Thickness = S.thickness
-                        line.Visible = true
-                    elseif line then
-                        line.Visible = false
-                    end
+        local bones = entry.bones
+        if S.skeleton and bones then
+            for i = 1, #bones do
+                local line = rec.bones[i]
+                if line then
+                    local pa = cam:WorldToViewportPoint(bones[i][1].Position)
+                    local pb = cam:WorldToViewportPoint(bones[i][2].Position)
+                    line.From = Vector2.new(pa.X, pa.Y)
+                    line.To = Vector2.new(pb.X, pb.Y)
+                    line.Color = col
+                    line.Thickness = S.thickness
+                    line.Visible = true
                 end
             end
+            for i = #bones + 1, #rec.bones do rec.bones[i].Visible = false end
         else
-            for _, l in ipairs(rec.bones) do l.Visible = false end
+            for i = 1, #rec.bones do rec.bones[i].Visible = false end
         end
     end
 end
 
-local espAccum = 0
-track(RunService.RenderStepped:Connect(function(dt)
-    espAccum += dt
-    if espAccum < lastInterval then return end
-    espAccum = 0
-    pcall(frameUpdate, dt)
+track(RunService.RenderStepped:Connect(function()
+    pcall(frameUpdate)
 end))
 
 --==============================================================
---  БХОП  (не изменялся)
+--  БХОП
 --==============================================================
 local lastJump = 0
 local airJumps = 0
@@ -1026,8 +1009,11 @@ local function doJump(auto)
     local root = hum.RootPart
     if not root or root.Anchored then return end
 
-    if isAirborne(hum) then
-        if S.jumpLimit >= 0 and airJumps >= S.jumpLimit then return end
+    local st = realState(hum)
+    local reallyAir = (st == Enum.HumanoidStateType.Freefall or st == Enum.HumanoidStateType.Jumping)
+
+    if reallyAir then
+        if not S.noAirSpread and S.jumpLimit >= 0 and airJumps >= S.jumpLimit then return end
         airJumps += 1
     else
         airJumps = 0
@@ -1036,6 +1022,19 @@ local function doJump(auto)
 
     if S.bhopAggro then
         pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+        local jp = hum.JumpPower
+        if not hum.UseJumpPower then
+            jp = math.sqrt(2 * Workspace.Gravity * hum.JumpHeight)
+        end
+        if jp and jp > 0 then
+            local v = root.AssemblyLinearVelocity
+            if v.Y < jp * 0.95 then
+                root.AssemblyLinearVelocity = Vector3.new(v.X, jp, v.Z)
+            end
+        end
+    elseif S.noAirSpread and reallyAir then
+        -- импульс напрямую в скорость, состояние не трогаем:
+        -- воздух остаётся воздухом, управление и momentum не ломаются
         local jp = hum.JumpPower
         if not hum.UseJumpPower then
             jp = math.sqrt(2 * Workspace.Gravity * hum.JumpHeight)
@@ -1111,14 +1110,9 @@ end
 
 local function restoreSpreadState()
     local hum = curHum
-    if not hum then return end
-    pcall(function()
-        hum.FloorMaterial = Enum.Material.Air
-        local root = hum.RootPart
-        if root and math.abs(root.AssemblyLinearVelocity.Y) > 1 then
-            hum:ChangeState(Enum.HumanoidStateType.Freefall)
-        end
-    end)
+    if hum then
+        pcall(function() hum.FloorMaterial = Enum.Material.Air end)
+    end
 end
 
 local function setAirSpread(on)
@@ -1133,8 +1127,12 @@ local function setAirSpread(on)
     end
 end
 
-track(RunService.RenderStepped:Connect(function()
+local spreadClock = 0
+track(RunService.RenderStepped:Connect(function(dt)
     if not S.noAirSpread then return end
+    spreadClock += dt
+    if spreadClock < 0.04 then return end
+    spreadClock = 0
 
     local hum = curHum
     if not hum or hum.Parent == nil then
@@ -1145,10 +1143,9 @@ track(RunService.RenderStepped:Connect(function()
 
     local st = realState(hum)
     if st == Enum.HumanoidStateType.Freefall or st == Enum.HumanoidStateType.Jumping then
-        -- Plastic + Running: хуман думает, что стоит на земле,
-        -- поэтому hum.Jump не съедается и бхоп продолжает работать
-        pcall(function() hum.FloorMaterial = Enum.Material.Plastic end)
-        pcall(function() hum:ChangeState(Enum.HumanoidStateType.Running) end)
+        if realFloor(hum) == Enum.Material.Air then
+            pcall(function() hum.FloorMaterial = Enum.Material.Plastic end)
+        end
     end
 end))
 
@@ -1502,8 +1499,6 @@ chips(visualPage, {
 }, S.style, function(v) S.style = v end)
 slider(visualPage, "Толщина линий", 1, 4, 1, function(v) S.thickness = v end)
 slider(visualPage, "Размер уголков", 4, 24, 9, function(v) S.cornerSize = v end)
-toggle(visualPage, "Заливка бокса", false, function(v) S.fill = v end)
-slider(visualPage, "Прозрачность заливки", 20, 95, 85, function(v) S.fillAlpha = v / 100 end)
 
 section(visualPage, "текст")
 slider(visualPage, "Размер текста", 9, 22, 13, function(v) S.textSize = v end)
@@ -1533,7 +1528,6 @@ chips(visualPage, {
 section(visualPage, "доп")
 toggle(visualPage, "Скелет", false, function(v) S.skeleton = v end)
 toggle(visualPage, "Трассеры", false, function(v) S.tracer = v end)
-toggle(visualPage, "Метки за экраном", false, function(v) S.offscreen = v end)
 
 section(visualPage, "цвет")
 chips(visualPage, {
