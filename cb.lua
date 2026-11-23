@@ -1,13 +1,4 @@
---!nocheck
---[[
-    SleepScript • Counter Blox (Rolve)  v3.5
-    ---------------------------------------------------------------
-    ESP (реальное время), бхоп, no air spread, фиксация FOV,
-    окно статистики, FPS boost, автобан, скинченджер ножей.
-    v3.3: земля определяется рейкастом — бхоп не улетает в небо.
-    v3.4: скинченджер.
-    v3.5: скинченджер через lp.SkinFolder (TFolder/CTFolder).
-]]
+
 
 local CONFIG = {
     ScriptURL   = "",
@@ -16,7 +7,7 @@ local CONFIG = {
     Keybind     = Enum.KeyCode.RightShift,
     DetectGrace = 20,
     LogOnly     = false,
-    Version     = "3.5",
+    Version     = "3.6",
 }
 
 if getgenv().SleepScript then pcall(function() getgenv().SleepScript.Unload() end) end
@@ -641,6 +632,27 @@ local function textbox(parent, placeholder, cb)
     return box
 end
 
+local function dumpBox(parent, height)
+    local box = new("TextBox", {
+        Text = "",
+        Font = Enum.Font.Code,
+        TextSize = 10,
+        TextColor3 = Color3.fromRGB(200, 200, 215),
+        BackgroundColor3 = Color3.fromRGB(14, 14, 19),
+        BorderSizePixel = 0,
+        ClearTextOnFocus = false,
+        TextEditable = false,
+        MultiLine = true,
+        TextWrapped = false,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Top,
+        Size = UDim2.new(1, 0, 0, height or 150),
+    }, parent)
+    new("UICorner", { CornerRadius = UDim.new(0, 8) }, box)
+    new("UIPadding", { PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6), PaddingTop = UDim.new(0, 6) }, box)
+    return box
+end
+
 local function chips(parent, items, current, cb, perRow)
     local cols = perRow or 4
     local grid = new("Frame", {
@@ -1252,7 +1264,6 @@ local KNIFE_WORDS = {
     "cleaver", "sickle", "axe", "banana",
 }
 
--- резервный список: используется, если игра не отдала данные
 local FALLBACK = {
     "Banana_Stock",
     "Bayonet_Aequalis", "Bayonet_Banner", "Bayonet_Candy Cane", "Bayonet_Consumed",
@@ -1323,18 +1334,17 @@ local function isKnifeName(name)
     return false
 end
 
-local function getSkinFolders()
-    local sf = lp:FindFirstChild("SkinFolder")
-    if not sf then return nil, nil end
-    return sf:FindFirstChild("TFolder"), sf:FindFirstChild("CTFolder")
-end
-
-local function folderList()
+-- все папки внутри SkinFolder (T/CT или любые другие)
+local function skinFolders()
     local out = {}
-    local t, ct = getSkinFolders()
-    if t then out[#out + 1] = t end
-    if ct then out[#out + 1] = ct end
-    return out
+    local sf = lp:FindFirstChild("SkinFolder")
+    if not sf then return out, nil end
+    for _, c in ipairs(sf:GetChildren()) do
+        if c:IsA("Folder") or c:IsA("Model") or c:IsA("Configuration") then
+            out[#out + 1] = c
+        end
+    end
+    return out, sf
 end
 
 local function splitSkin(line)
@@ -1356,7 +1366,6 @@ local function buildPool()
         addSkin(splitSkin(line))
     end
 
-    -- инвентарь игрока
     pcall(function()
         local pg = lp:FindFirstChild("PlayerGui")
         local cl = pg and pg:FindFirstChild("Client")
@@ -1370,7 +1379,6 @@ local function buildPool()
         end
     end)
 
-    -- модули со списками скинов
     pcall(function()
         for _, d in ipairs(ReplicatedStorage:GetDescendants()) do
             if d:IsA("ModuleScript") and string.find(string.lower(d.Name), "skin", 1, true) then
@@ -1383,16 +1391,27 @@ local function buildPool()
             end
         end
     end)
+end
 
-    -- стволы, которые реально есть в SkinFolder
-    for _, f in ipairs(folderList()) do
-        for _, v in ipairs(f:GetChildren()) do
-            if isKnifeName(v.Name) then
-                SKIN.pool[v.Name] = SKIN.pool[v.Name] or {}
-                SKIN.pool[v.Name]["Stock"] = true
-            end
+-- ключи, которые реально существуют в SkinFolder
+local function liveKeys()
+    local set = {}
+    for _, f in ipairs(skinFolders()) do
+        for _, c in ipairs(f:GetChildren()) do
+            if isKnifeName(c.Name) then set[c.Name] = true end
         end
     end
+    local tool = getEquippedKnife()
+    if tool then set[tool.Name] = true end
+    return set
+end
+
+local function mergedSkins()
+    local out = {}
+    for _, skins in pairs(SKIN.pool) do
+        for s in pairs(skins) do out[s] = true end
+    end
+    return out
 end
 
 local function getEquippedKnife()
@@ -1400,6 +1419,42 @@ local function getEquippedKnife()
     if not char then return nil end
     for _, t in ipairs(char:GetChildren()) do
         if t:IsA("Tool") and isKnifeName(t.Name) then return t end
+    end
+    return nil
+end
+
+-- поиск объекта значения: точное имя, регистр, вложенность, нечёткое совпадение
+local function findHolder(folder, weapon)
+    local exact = folder:FindFirstChild(weapon)
+    if exact then return exact end
+
+    local lw = string.lower(weapon)
+    local kids = folder:GetChildren()
+
+    for _, c in ipairs(kids) do
+        if string.lower(c.Name) == lw then return c end
+    end
+
+    for _, c in ipairs(kids) do
+        for _, inner in ipairs(c:GetChildren()) do
+            if string.lower(inner.Name) == lw then return inner end
+        end
+    end
+
+    for _, c in ipairs(kids) do
+        local ln = string.lower(c.Name)
+        if #ln > 2 and (string.find(ln, lw, 1, true) or string.find(lw, ln, 1, true)) then
+            return c
+        end
+    end
+
+    return nil
+end
+
+local function holderValue(holder)
+    if holder:IsA("StringValue") then return holder end
+    for _, c in ipairs(holder:GetChildren()) do
+        if c:IsA("StringValue") then return c end
     end
     return nil
 end
@@ -1421,17 +1476,29 @@ local function reequip()
     end)
 end
 
+-- ключ: сначала нож в руках, потом выбранный в меню
+local function resolveKey()
+    local tool = getEquippedKnife()
+    if tool then
+        for _, f in ipairs(skinFolders()) do
+            if findHolder(f, tool.Name) then return tool.Name end
+        end
+    end
+    return SKIN.knife
+end
+
 local function setSkin(weapon, skin)
     if not weapon or not skin then return false end
     local hit = 0
-    for _, f in ipairs(folderList()) do
-        local v = f:FindFirstChild(weapon)
-        if v and v:IsA("StringValue") then
+    for _, f in ipairs(skinFolders()) do
+        local holder = findHolder(f, weapon)
+        local value = holder and holderValue(holder)
+        if value then
             SKIN.saved[weapon] = SKIN.saved[weapon] or {}
             if SKIN.saved[weapon][f.Name] == nil then
-                SKIN.saved[weapon][f.Name] = v.Value
+                SKIN.saved[weapon][f.Name] = value.Value
             end
-            pcall(function() v.Value = skin end)
+            pcall(function() value.Value = skin end)
             hit += 1
         end
     end
@@ -1442,10 +1509,13 @@ local function restoreWeapon(weapon)
     local saved = SKIN.saved[weapon]
     if not saved then return end
     SKIN.saved[weapon] = nil
-    for _, f in ipairs(folderList()) do
-        local v = f:FindFirstChild(weapon)
-        local old = v and saved[f.Name]
-        if v and old then pcall(function() v.Value = old end) end
+    for _, f in ipairs(skinFolders()) do
+        local old = saved[f.Name]
+        if old then
+            local holder = findHolder(f, weapon)
+            local value = holder and holderValue(holder)
+            if value then pcall(function() value.Value = old end) end
+        end
     end
 end
 
@@ -1456,8 +1526,10 @@ local function restoreAll()
 end
 
 local function apply()
-    if not SKIN.knife or not SKIN.skin then return false end
-    if not setSkin(SKIN.knife, SKIN.skin) then return false end
+    if not SKIN.skin then return false end
+    local key = resolveKey()
+    if not key then return false end
+    if not setSkin(key, SKIN.skin) then return false end
     reequip()
     return true
 end
@@ -1466,13 +1538,39 @@ track(lp.CharacterAdded:Connect(function(char)
     track(char.ChildAdded:Connect(function(c)
         if c:IsA("Tool") and isKnifeName(c.Name) and SKIN.enabled and SKIN.autoApply then
             task.delay(0.3, function()
-                if not (SKIN.knife and SKIN.skin) then return end
-                setSkin(SKIN.knife, SKIN.skin)
-                if SKIN.knife == c.Name then reequip() end
+                if not SKIN.skin then return end
+                if setSkin(c.Name, SKIN.skin) then reequip() end
             end)
         end
     end))
 end))
+
+local function dumpStructure()
+    local lines = {}
+    local sf = lp:FindFirstChild("SkinFolder")
+    if not sf then
+        lines[#lines + 1] = "SkinFolder отсутствует"
+        for _, c in ipairs(lp:GetChildren()) do
+            lines[#lines + 1] = "lp." .. c.Name .. " [" .. c.ClassName .. "]"
+        end
+        return table.concat(lines, "\n")
+    end
+    local function walk(inst, depth)
+        if #lines > 160 then return end
+        for _, c in ipairs(inst:GetChildren()) do
+            if #lines > 160 then return end
+            local val = ""
+            if c:IsA("ValueBase") then
+                local ok, v = pcall(function() return c.Value end)
+                val = ok and (" = " .. tostring(v)) or ""
+            end
+            lines[#lines + 1] = string.rep("  ", depth) .. c.Name .. " [" .. c.ClassName .. "]" .. val
+            if depth < 2 then walk(c, depth + 1) end
+        end
+    end
+    walk(sf, 0)
+    return table.concat(lines, "\n")
+end
 
 --==============================================================
 --  ОКНО СТАТИСТИКИ
@@ -1844,11 +1942,8 @@ section(skinPage, "скинченджер")
 toggle(skinPage, "Включить скинченджер", false, function(v)
     SKIN.enabled = v
     if v then
-        if next(SKIN.pool) == nil then buildPool() end
         if apply() then
-            notify("Скин применён: " .. SKIN.knife .. " | " .. SKIN.skin)
-        elseif SKIN.knife and SKIN.skin then
-            notify("Не нашёл ствол в SkinFolder")
+            notify("Скин применён: " .. SKIN.skin)
         else
             notify("Выбери нож и скин")
         end
@@ -1858,7 +1953,7 @@ toggle(skinPage, "Включить скинченджер", false, function(v)
 end)
 toggle(skinPage, "Авто-применение", true, function(v) SKIN.autoApply = v end)
 
-section(skinPage, "нож")
+section(skinPage, "нож (из SkinFolder)")
 local knifeHolder = new("Frame", {
     Size = UDim2.new(1, 0, 0, 0),
     BackgroundTransparency = 1,
@@ -1873,7 +1968,7 @@ local skinHolder = new("Frame", {
 }, skinPage)
 
 local skinStatus = new("TextLabel", {
-    Text = "Ножи: —",
+    Text = "—",
     Font = Enum.Font.Gotham,
     TextSize = 11,
     TextColor3 = Color3.fromRGB(130, 130, 148),
@@ -1891,16 +1986,14 @@ local rebuildSkins
 local function rebuildKnives()
     clearHolder(knifeHolder)
     local items = {}
-    for name, skins in pairs(SKIN.pool) do
-        local count = 0
-        for _ in pairs(skins) do count += 1 end
-        items[#items + 1] = { name = string.format("%s (%d)", name, count), value = name }
+    for name in pairs(liveKeys()) do
+        items[#items + 1] = { name = name, value = name }
     end
     table.sort(items, function(a, b) return a.name < b.name end)
-    skinStatus.Text = string.format("Ножи: %d", #items)
+    skinStatus.Text = string.format("В SkinFolder ножей: %d", #items)
     if #items == 0 then
         new("TextLabel", {
-            Text = "Пусто — жми «Диагностика»",
+            Text = "В SkinFolder нет ножей — жми «Дамп структуры»",
             Font = Enum.Font.Gotham, TextSize = 11,
             TextColor3 = Color3.fromRGB(150, 150, 168),
             BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 16),
@@ -1913,13 +2006,13 @@ local function rebuildKnives()
         SKIN.skin = nil
         rebuildSkins()
         if SKIN.enabled and SKIN.skin then apply() end
-    end, 3)
+    end, 2)
 end
 
 function rebuildSkins()
     clearHolder(skinHolder)
     local skins = SKIN.knife and SKIN.pool[SKIN.knife]
-    if not skins then
+    if not SKIN.knife then
         new("TextLabel", {
             Text = "Сначала выбери нож",
             Font = Enum.Font.Gotham, TextSize = 11,
@@ -1929,9 +2022,23 @@ function rebuildSkins()
         }, skinHolder)
         return
     end
+    local loose = false
+    if not skins then
+        skins = mergedSkins()
+        loose = true
+    end
     local items = {}
     for skin in pairs(skins) do items[#items + 1] = { name = skin, value = skin } end
     table.sort(items, function(a, b) return a.name < b.name end)
+    if loose then
+        new("TextLabel", {
+            Text = "Точного списка нет — показан общий набор",
+            Font = Enum.Font.Gotham, TextSize = 10,
+            TextColor3 = Color3.fromRGB(240, 200, 90),
+            BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 14),
+            TextXAlignment = Enum.TextXAlignment.Left,
+        }, skinHolder)
+    end
     chips(skinHolder, items, SKIN.skin, function(v)
         SKIN.skin = v
         if not SKIN.enabled then
@@ -1939,7 +2046,7 @@ function rebuildSkins()
             return
         end
         if apply() then
-            notify(SKIN.knife .. " | " .. v)
+            notify(v)
         else
             notify("Ствол не найден в SkinFolder")
         end
@@ -1949,14 +2056,14 @@ end
 section(skinPage, "ручной ввод")
 local manualBox = textbox(skinPage, "суффикс скина, напр. Doppler", function(text)
     text = string.gsub(text or "", "^%s*(.-)%s*$", "%1")
-    if text == "" or not SKIN.knife then
-        notify("Выбери нож и впиши скин")
+    if text == "" then
+        notify("Впиши суффикс скина")
         return
     end
     SKIN.skin = text
     SKIN.enabled = true
     if apply() then
-        notify(SKIN.knife .. " | " .. text)
+        notify(text)
     else
         notify("Ствол не найден в SkinFolder")
     end
@@ -1964,10 +2071,10 @@ end)
 
 section(skinPage, "действия")
 button(skinPage, "Применить", function()
-    if not SKIN.knife or not SKIN.skin then notify("Выбери нож и скин") return end
+    if not SKIN.skin then notify("Выбери скин") return end
     SKIN.enabled = true
     if apply() then
-        notify(SKIN.knife .. " | " .. SKIN.skin)
+        notify(SKIN.skin)
     else
         notify("Ствол не найден в SkinFolder")
     end
@@ -1981,40 +2088,22 @@ button(skinPage, "Обновить список", function()
     buildPool()
     rebuildKnives()
     rebuildSkins()
-    local n = 0
-    for _ in pairs(SKIN.pool) do n += 1 end
-    notify("Ножей: " .. n)
+    notify("Обновлено")
 end)
-button(skinPage, "Диагностика", function()
-    local sf = lp:FindFirstChild("SkinFolder")
-    if not sf then
-        local names = {}
-        for _, c in ipairs(lp:GetChildren()) do names[#names + 1] = c.Name end
-        logFile("SkinFolder нет. lp: " .. table.concat(names, ", "))
-        notify("Нет SkinFolder (лог)")
-        return
-    end
-    local t, ct = getSkinFolders()
-    local items = 0
-    local sample = {}
-    for _, f in ipairs(folderList()) do
-        items += #f:GetChildren()
-        for i, c in ipairs(f:GetChildren()) do
-            if i <= 10 then
-                sample[#sample + 1] = string.format("%s(%s)=%s", c.Name, c.ClassName,
-                    tostring(c:IsA("StringValue") and c.Value))
-            end
-        end
-    end
-    logFile(string.format("SkinFolder T=%s CT=%s items=%d", tostring(t ~= nil), tostring(ct ~= nil), items))
-    logFile("sample: " .. table.concat(sample, " | "))
-    notify(string.format("T=%s CT=%s, предметов %d (лог)", tostring(t ~= nil), tostring(ct ~= nil), items))
+
+section(skinPage, "диагностика")
+local dumpOut = dumpBox(skinPage, 150)
+button(skinPage, "Дамп структуры", function()
+    local text = dumpStructure()
+    dumpOut.Text = text
+    logFile("DUMP:\n" .. text)
+    notify("Дамп готов (в поле и в логе)")
 end)
 
 task.spawn(function()
     for _ = 1, 15 do
         if SKIN.dead then return end
-        if getSkinFolders() then break end
+        if lp:FindFirstChild("SkinFolder") then break end
         task.wait(1)
     end
     buildPool()
