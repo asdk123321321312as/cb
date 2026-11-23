@@ -1,20 +1,13 @@
---!nocheck
---[[
-    SleepScript • Counter Blox (Rolve)  v2.2
-    ---------------------------------------------------------------
-    ESP, бхоп, no air spread, фиксация FOV,
-    небо с пресетами, автобаннихоп.
-    v2.2: pixel surf убран, добавлен стелс-режим.
---]]
+
 
 local CONFIG = {
-    ScriptURL   = "", -- пизла
-    Accent      = Color3.fromRGB(122, 92, 255),
-    AccentDark  = Color3.fromRGB(64, 46, 150),
+    ScriptURL   = "",
+    Accent      = Color3.fromRGB(126, 96, 255),
+    AccentDim   = Color3.fromRGB(52, 40, 104),
     Keybind     = Enum.KeyCode.RightShift,
     DetectGrace = 20,
     LogOnly     = false,
-    Version     = "2.2",
+    Version     = "3.0",
 }
 
 if getgenv().SleepScript then pcall(function() getgenv().SleepScript.Unload() end) end
@@ -32,22 +25,18 @@ local TeleportService   = cloneref(game:GetService("TeleportService"))
 local HttpService       = cloneref(game:GetService("HttpService"))
 local ReplicatedStorage = cloneref(game:GetService("ReplicatedStorage"))
 local Lighting          = cloneref(game:GetService("Lighting"))
+local Stats             = cloneref(game:GetService("Stats"))
 local Workspace         = cloneref(workspace)
 local lp                = Players.LocalPlayer
 
-if not Drawing then
-    return warn("[SleepScript] нет Drawing API — ESP не запустится.")
-end
+local hasDrawing = Drawing ~= nil and Drawing.new ~= nil
 
 --==============================================================
 --  СОСТОЯНИЕ
 --==============================================================
 local S = {
-    paranoid     = false,
-    adaptive     = true,
     espEnabled   = false,
-
-    style        = "full",
+    style        = "corner",
     thickness    = 1,
     cornerSize   = 9,
     fill         = false,
@@ -65,32 +54,32 @@ local S = {
     colorMode    = "static",
     colorStatic  = Color3.fromRGB(235, 235, 245),
     colorHidden  = Color3.fromRGB(150, 150, 165),
-    colorTracer  = Color3.fromRGB(122, 92, 255),
+    colorTracer  = Color3.fromRGB(126, 96, 255),
 
     teamCheck    = true,
     showLocal    = false,
     maxDist      = 600,
+    adaptive     = true,
 
     bhop         = false,
     bhopAggro    = false,
     jumpLimit    = 0,
     noAirSpread  = false,
-    spreadHard   = false,
-    spreadForce  = true,
 
     fovEnabled   = false,
     fovValue     = 90,
 
     watchEnabled = true,
     autoRejoin   = true,
-    onlySelf     = true,
     rejoinDelay  = 1.5,
     banCount     = 0,
     lastReason   = "—",
+
+    fpsBoost     = false,
+    statsWindow  = false,
 }
 
 local selfRead = false
-
 local connections = {}
 local function track(c) table.insert(connections, c) return c end
 
@@ -155,12 +144,6 @@ local function isAirborne(hum)
     if st == Enum.HumanoidStateType.Freefall or st == Enum.HumanoidStateType.Jumping then
         return true
     end
-    if S.spreadHard and st == Enum.HumanoidStateType.Running then
-        local root = hum.RootPart
-        if root and math.abs(root.AssemblyLinearVelocity.Y) > 2.5 then
-            return true
-        end
-    end
     return realFloor(hum) == Enum.Material.Air
 end
 
@@ -173,11 +156,7 @@ local fovOriginal = camera and camera.FieldOfView or 70
 local function applyFov()
     local cam = camera or Workspace.CurrentCamera
     if not cam then return end
-    if S.fovEnabled then
-        pcall(function() cam.FieldOfView = S.fovValue end)
-    else
-        pcall(function() cam.FieldOfView = fovOriginal end)
-    end
+    pcall(function() cam.FieldOfView = S.fovEnabled and S.fovValue or fovOriginal end)
 end
 
 track(RunService.RenderStepped:Connect(function()
@@ -197,13 +176,19 @@ track(Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
 end))
 
 --==============================================================
---  UI
+--  UI ХЕЛПЕРЫ
 --==============================================================
 local function new(class, props, parent)
     local inst = Instance.new(class)
     for k, v in pairs(props or {}) do inst[k] = v end
     if parent then inst.Parent = parent end
     return inst
+end
+
+local function tw(inst, time, props, style, dir)
+    local t = TweenService:Create(inst, TweenInfo.new(time or 0.15, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out), props)
+    t:Play()
+    return t
 end
 
 local gui = new("ScreenGui", {
@@ -214,171 +199,203 @@ local gui = new("ScreenGui", {
     DisplayOrder = 9999,
 }, gethui())
 
+-- тень / свечение
 local glow = new("Frame", {
-    Size = UDim2.fromOffset(502, 376),
-    Position = UDim2.new(0.5, -251, 0.5, -188),
+    Size = UDim2.fromOffset(508, 372),
+    Position = UDim2.new(0.5, -254, 0.5, -186),
     BackgroundColor3 = CONFIG.Accent,
-    BackgroundTransparency = 0.86,
+    BackgroundTransparency = 0.9,
     BorderSizePixel = 0,
     ZIndex = 0,
 }, gui)
-new("UICorner", { CornerRadius = UDim.new(0, 20) }, glow)
+new("UICorner", { CornerRadius = UDim.new(0, 22) }, glow)
 
 local main = new("Frame", {
-    Size = UDim2.fromOffset(486, 360),
-    Position = UDim2.new(0.5, -243, 0.5, -180),
-    BackgroundColor3 = Color3.fromRGB(13, 15, 20),
+    Size = UDim2.fromOffset(492, 356),
+    Position = UDim2.new(0.5, -246, 0.5, -178),
+    BackgroundColor3 = Color3.fromRGB(9, 9, 12),
     BorderSizePixel = 0,
     ClipsDescendants = true,
     ZIndex = 1,
 }, gui)
-new("UICorner", { CornerRadius = UDim.new(0, 12) }, main)
-new("UIStroke", { Color = CONFIG.Accent, Thickness = 1, Transparency = 0.5 }, main)
+new("UICorner", { CornerRadius = UDim.new(0, 14) }, main)
+new("UIStroke", { Color = Color3.fromRGB(255, 255, 255), Transparency = 0.9, Thickness = 1 }, main)
+
+local mainScale = new("UIScale", { Scale = 0.94 }, main)
 
 track(main:GetPropertyChangedSignal("Visible"):Connect(function()
     glow.Visible = main.Visible
 end))
 
+-- открытие
+main.BackgroundTransparency = 1
+task.spawn(function()
+    tw(mainScale, 0.3, { Scale = 1 }, Enum.EasingStyle.Back)
+    tw(main, 0.25, { BackgroundTransparency = 0 })
+end)
+
 local header = new("Frame", {
-    Size = UDim2.new(1, 0, 0, 58),
-    BackgroundColor3 = Color3.fromRGB(19, 17, 32),
+    Size = UDim2.new(1, 0, 0, 54),
+    BackgroundColor3 = Color3.fromRGB(14, 14, 19),
     BorderSizePixel = 0,
     ZIndex = 2,
 }, main)
-new("UICorner", { CornerRadius = UDim.new(0, 12) }, header)
+new("UICorner", { CornerRadius = UDim.new(0, 14) }, header)
 new("Frame", {
-    Size = UDim2.new(1, 0, 0, 16), Position = UDim2.new(0, 0, 1, -16),
-    BackgroundColor3 = Color3.fromRGB(19, 17, 32), BorderSizePixel = 0,
+    Size = UDim2.new(1, 0, 0, 14), Position = UDim2.new(0, 0, 1, -14),
+    BackgroundColor3 = Color3.fromRGB(14, 14, 19), BorderSizePixel = 0,
 }, header)
-local grad = new("UIGradient", {
-    Color = ColorSequence.new(CONFIG.Accent, CONFIG.AccentDark),
-    Rotation = 25,
+
+local topLine = new("Frame", {
+    Size = UDim2.new(1, 0, 0, 2),
+    BackgroundColor3 = CONFIG.Accent,
+    BorderSizePixel = 0,
+    ZIndex = 5,
 }, header)
-grad.Transparency = NumberSequence.new({
-    NumberSequenceKeypoint.new(0, 0.78),
+local tlGrad = new("UIGradient", {
+    Color = ColorSequence.new(Color3.fromRGB(60, 40, 130), CONFIG.Accent, Color3.fromRGB(60, 40, 130)),
+}, topLine)
+tlGrad.Transparency = NumberSequence.new({
+    NumberSequenceKeypoint.new(0, 1),
+    NumberSequenceKeypoint.new(0.5, 0.1),
     NumberSequenceKeypoint.new(1, 1),
 })
 
-local title = new("TextLabel", {
-    Text = "SleepScript",
+new("TextLabel", {
+    Text = "Sleep",
     Font = Enum.Font.GothamBold,
-    TextSize = 21,
+    TextSize = 19,
     TextColor3 = Color3.fromRGB(255, 255, 255),
     BackgroundTransparency = 1,
-    Position = UDim2.fromOffset(17, 9),
-    Size = UDim2.fromOffset(240, 24),
+    Position = UDim2.fromOffset(18, 10),
+    Size = UDim2.fromOffset(120, 22),
     TextXAlignment = Enum.TextXAlignment.Left,
     ZIndex = 3,
 }, header)
-new("UIGradient", {
-    Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), CONFIG.Accent),
-    Rotation = 12,
-}, title)
 
 new("TextLabel", {
-    Text = "counter blox  •  esp  •  bhop  •  no spread  •  sky  •  rac watch",
+    Text = "counter blox",
     Font = Enum.Font.Gotham,
     TextSize = 11,
-    TextColor3 = Color3.fromRGB(150, 150, 175),
+    TextColor3 = Color3.fromRGB(120, 120, 138),
     BackgroundTransparency = 1,
-    Position = UDim2.fromOffset(18, 33),
-    Size = UDim2.fromOffset(380, 14),
+    Position = UDim2.fromOffset(78, 14),
+    Size = UDim2.fromOffset(200, 16),
     TextXAlignment = Enum.TextXAlignment.Left,
     ZIndex = 3,
 }, header)
 
-local accentLine = new("Frame", {
-    Size = UDim2.new(0, 46, 0, 2),
-    Position = UDim2.fromOffset(18, 53),
-    BackgroundColor3 = CONFIG.Accent,
-    BorderSizePixel = 0,
+new("TextLabel", {
+    Text = "v" .. CONFIG.Version,
+    Font = Enum.Font.GothamMedium,
+    TextSize = 10,
+    TextColor3 = CONFIG.Accent,
+    BackgroundTransparency = 1,
+    Position = UDim2.fromOffset(18, 30),
+    Size = UDim2.fromOffset(80, 14),
+    TextXAlignment = Enum.TextXAlignment.Left,
     ZIndex = 3,
 }, header)
-new("UICorner", { CornerRadius = UDim.new(1, 0) }, accentLine)
-TweenService:Create(accentLine, TweenInfo.new(2.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {
-    Size = UDim2.new(0, 96, 0, 2),
-}):Play()
 
 local function headerButton(x, symbol, cb)
     local b = new("TextButton", {
         Text = symbol,
         Font = Enum.Font.GothamBold,
-        TextSize = 14,
-        TextColor3 = Color3.fromRGB(190, 190, 205),
-        BackgroundColor3 = Color3.fromRGB(34, 30, 56),
-        BackgroundTransparency = 0.35,
+        TextSize = 13,
+        TextColor3 = Color3.fromRGB(170, 170, 188),
+        BackgroundColor3 = Color3.fromRGB(24, 24, 32),
         BorderSizePixel = 0,
         AutoButtonColor = false,
-        Position = UDim2.new(1, x, 0, 18),
-        Size = UDim2.fromOffset(22, 22),
+        Position = UDim2.new(1, x, 0, 15),
+        Size = UDim2.fromOffset(24, 24),
         ZIndex = 4,
     }, header)
-    new("UICorner", { CornerRadius = UDim.new(0, 6) }, b)
+    new("UICorner", { CornerRadius = UDim.new(0, 7) }, b)
     b.MouseEnter:Connect(function()
-        TweenService:Create(b, TweenInfo.new(0.12), { BackgroundTransparency = 0 }):Play()
+        tw(b, 0.14, { BackgroundColor3 = Color3.fromRGB(38, 32, 62), TextColor3 = Color3.fromRGB(255, 255, 255) })
     end)
     b.MouseLeave:Connect(function()
-        TweenService:Create(b, TweenInfo.new(0.12), { BackgroundTransparency = 0.35 }):Play()
+        tw(b, 0.14, { BackgroundColor3 = Color3.fromRGB(24, 24, 32), TextColor3 = Color3.fromRGB(170, 170, 188) })
     end)
     b.MouseButton1Click:Connect(cb)
     return b
 end
 
-headerButton(-58, "—", function() main.Visible = not main.Visible end)
+headerButton(-88, "◉", function()
+    S.statsWindow = not S.statsWindow
+    local win = gui:FindFirstChild("SleepStats")
+    if win then win.Visible = S.statsWindow end
+end)
+
+headerButton(-58, "—", function()
+    main.Visible = not main.Visible
+    if main.Visible then
+        mainScale.Scale = 0.94
+        tw(mainScale, 0.22, { Scale = 1 }, Enum.EasingStyle.Back)
+    end
+end)
+
 headerButton(-32, "×", function()
     if getgenv().SleepScript then getgenv().SleepScript.Unload() end
 end)
 
-local dragging, dragStart, startPos
-track(header.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = true
-        dragStart = input.Position
-        startPos = main.Position
-    end
-end))
-track(UIS.InputChanged:Connect(function(input)
-    if not dragging then return end
-    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-        local d = input.Position - dragStart
-        main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
-        glow.Position = UDim2.new(main.Position.X.Scale, main.Position.X.Offset - 8,
-            main.Position.Y.Scale, main.Position.Y.Offset - 8)
-    end
-end))
-track(UIS.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = false
-    end
+-- перетаскивание
+local function makeDraggable(frame, handle)
+    local dragging, dragStart, startPos
+    track(handle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = frame.Position
+        end
+    end))
+    track(UIS.InputChanged:Connect(function(input)
+        if not dragging then return end
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            local d = input.Position - dragStart
+            frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+        end
+    end))
+    track(UIS.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end))
+end
+
+makeDraggable(main, header)
+track(main:GetPropertyChangedSignal("Position"):Connect(function()
+    glow.Position = UDim2.new(main.Position.X.Scale, main.Position.X.Offset - 8,
+        main.Position.Y.Scale, main.Position.Y.Offset - 8)
 end))
 
 local sidebar = new("Frame", {
-    Size = UDim2.new(0, 118, 1, -58),
-    Position = UDim2.fromOffset(0, 58),
-    BackgroundColor3 = Color3.fromRGB(15, 16, 22),
+    Size = UDim2.new(0, 116, 1, -54),
+    Position = UDim2.fromOffset(0, 54),
+    BackgroundColor3 = Color3.fromRGB(11, 11, 15),
     BorderSizePixel = 0,
 }, main)
 new("UIListLayout", { Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder }, sidebar)
 new("UIPadding", { PaddingTop = UDim.new(0, 10), PaddingLeft = UDim.new(0, 9), PaddingRight = UDim.new(0, 9) }, sidebar)
 
 local content = new("Frame", {
-    Size = UDim2.new(1, -118, 1, -82),
-    Position = UDim2.fromOffset(118, 58),
+    Size = UDim2.new(1, -116, 1, -78),
+    Position = UDim2.fromOffset(116, 54),
     BackgroundTransparency = 1,
 }, main)
 new("UIPadding", { PaddingTop = UDim.new(0, 10), PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 14) }, content)
 
 local footer = new("Frame", {
-    Size = UDim2.new(1, -118, 0, 24),
-    Position = UDim2.new(0, 118, 1, -24),
-    BackgroundColor3 = Color3.fromRGB(15, 16, 22),
+    Size = UDim2.new(1, -116, 0, 24),
+    Position = UDim2.new(0, 116, 1, -24),
+    BackgroundColor3 = Color3.fromRGB(11, 11, 15),
     BorderSizePixel = 0,
 }, main)
 new("TextLabel", {
-    Text = "v" .. CONFIG.Version .. "  •  RightShift — меню",
+    Text = "RightShift — меню",
     Font = Enum.Font.Gotham,
     TextSize = 10,
-    TextColor3 = Color3.fromRGB(105, 105, 125),
+    TextColor3 = Color3.fromRGB(96, 96, 112),
     BackgroundTransparency = 1,
     Position = UDim2.fromOffset(12, 4),
     Size = UDim2.new(1, -24, 0, 16),
@@ -407,42 +424,49 @@ local function tabButton(label, key)
         Text = label,
         Font = Enum.Font.GothamMedium,
         TextSize = 13,
-        TextColor3 = Color3.fromRGB(150, 150, 170),
-        BackgroundColor3 = Color3.fromRGB(22, 23, 32),
-        BackgroundTransparency = 0.4,
+        TextColor3 = Color3.fromRGB(140, 140, 158),
+        BackgroundColor3 = Color3.fromRGB(18, 18, 24),
         BorderSizePixel = 0,
         AutoButtonColor = false,
         Size = UDim2.new(1, 0, 0, 30),
     }, sidebar)
-    new("UICorner", { CornerRadius = UDim.new(0, 7) }, b)
+    new("UICorner", { CornerRadius = UDim.new(0, 8) }, b)
 
     local bar = new("Frame", {
-        Size = UDim2.new(0, 3, 0, 14),
-        Position = UDim2.new(0, 0, 0.5, -7),
+        Size = UDim2.new(0, 3, 0, 0),
+        Position = UDim2.new(0, 0, 0.5, 0),
         BackgroundColor3 = CONFIG.Accent,
         BorderSizePixel = 0,
-        Visible = false,
     }, b)
     new("UICorner", { CornerRadius = UDim.new(1, 0) }, bar)
 
     tabs[key] = b
     tabBars[key] = bar
+
     b.MouseEnter:Connect(function()
-        if not pages[key].Visible then
-            TweenService:Create(b, TweenInfo.new(0.12), { BackgroundTransparency = 0.15 }):Play()
-        end
+        if not pages[key].Visible then tw(b, 0.14, { BackgroundColor3 = Color3.fromRGB(26, 26, 36) }) end
     end)
     b.MouseLeave:Connect(function()
-        if not pages[key].Visible then
-            TweenService:Create(b, TweenInfo.new(0.12), { BackgroundTransparency = 0.4 }):Play()
-        end
+        if not pages[key].Visible then tw(b, 0.14, { BackgroundColor3 = Color3.fromRGB(18, 18, 24) }) end
     end)
     b.MouseButton1Click:Connect(function()
         for k, p in pairs(pages) do p.Visible = (k == key) end
         for k, t in pairs(tabs) do
-            t.TextColor3 = (k == key) and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(150, 150, 170)
-            t.BackgroundColor3 = (k == key) and CONFIG.AccentDark or Color3.fromRGB(22, 23, 32)
-            tabBars[k].Visible = (k == key)
+            tw(t, 0.16, {
+                TextColor3 = (k == key) and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(140, 140, 158),
+                BackgroundColor3 = (k == key) and Color3.fromRGB(34, 27, 66) or Color3.fromRGB(18, 18, 24),
+            })
+            local bar = tabBars[k]
+            if k == key then
+                tw(bar, 0.18, { Size = UDim2.new(0, 3, 0, 16), Position = UDim2.new(0, 0, 0.5, -8) })
+            else
+                tw(bar, 0.18, { Size = UDim2.new(0, 3, 0, 0), Position = UDim2.new(0, 0, 0.5, 0) })
+            end
+        end
+        local pg = pages[key]
+        if pg then
+            pg.Position = UDim2.fromOffset(10, 0)
+            tw(pg, 0.2, { Position = UDim2.fromOffset(0, 0) })
         end
     end)
     return b
@@ -451,7 +475,7 @@ end
 local function section(parent, text)
     new("Frame", {
         Size = UDim2.new(1, 0, 0, 1),
-        BackgroundColor3 = Color3.fromRGB(34, 34, 46),
+        BackgroundColor3 = Color3.fromRGB(28, 28, 38),
         BorderSizePixel = 0,
     }, parent)
     return new("TextLabel", {
@@ -473,33 +497,38 @@ local function toggle(parent, text, default, cb)
     local r = row(parent)
     new("TextLabel", {
         Text = text, Font = Enum.Font.Gotham, TextSize = 13,
-        TextColor3 = Color3.fromRGB(212, 212, 225), BackgroundTransparency = 1,
+        TextColor3 = Color3.fromRGB(210, 210, 224), BackgroundTransparency = 1,
         Size = UDim2.new(1, -44, 1, 0), TextXAlignment = Enum.TextXAlignment.Left,
     }, r)
     local pill = new("Frame", {
         Size = UDim2.fromOffset(34, 18), Position = UDim2.new(1, -34, 0.5, -9),
-        BackgroundColor3 = Color3.fromRGB(44, 44, 58), BorderSizePixel = 0,
+        BackgroundColor3 = Color3.fromRGB(36, 36, 46), BorderSizePixel = 0,
     }, r)
     new("UICorner", { CornerRadius = UDim.new(1, 0) }, pill)
     local knob = new("Frame", {
         Size = UDim2.fromOffset(14, 14), Position = UDim2.fromOffset(2, 2),
-        BackgroundColor3 = Color3.fromRGB(230, 230, 240), BorderSizePixel = 0,
+        BackgroundColor3 = Color3.fromRGB(215, 215, 228), BorderSizePixel = 0,
     }, pill)
     new("UICorner", { CornerRadius = UDim.new(1, 0) }, knob)
 
     local state = default
     local function render(instant)
-        local info = TweenInfo.new(instant and 0 or 0.14, Enum.EasingStyle.Quad)
+        local info = TweenInfo.new(instant and 0 or 0.16, Enum.EasingStyle.Quad)
         TweenService:Create(knob, info, {
             Position = state and UDim2.fromOffset(18, 2) or UDim2.fromOffset(2, 2),
         }):Play()
         TweenService:Create(pill, info, {
-            BackgroundColor3 = state and CONFIG.Accent or Color3.fromRGB(44, 44, 58),
+            BackgroundColor3 = state and CONFIG.Accent or Color3.fromRGB(36, 36, 46),
         }):Play()
     end
     render(true)
 
-    local function set(v) state = v; render(); cb(v) end
+    local function set(v)
+        if state == v then return end
+        state = v
+        render()
+        cb(v)
+    end
     pill.InputBegan:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
             set(not state)
@@ -512,7 +541,7 @@ local function slider(parent, text, min, max, default, cb)
     local holder = new("Frame", { Size = UDim2.new(1, 0, 0, 40), BackgroundTransparency = 1 }, parent)
     new("TextLabel", {
         Text = text, Font = Enum.Font.Gotham, TextSize = 13,
-        TextColor3 = Color3.fromRGB(212, 212, 225), BackgroundTransparency = 1,
+        TextColor3 = Color3.fromRGB(210, 210, 224), BackgroundTransparency = 1,
         Size = UDim2.new(1, -60, 0, 18), TextXAlignment = Enum.TextXAlignment.Left,
     }, holder)
     local valueLabel = new("TextLabel", {
@@ -523,7 +552,7 @@ local function slider(parent, text, min, max, default, cb)
     }, holder)
     local trackF = new("Frame", {
         Size = UDim2.new(1, 0, 0, 5), Position = UDim2.fromOffset(0, 26),
-        BackgroundColor3 = Color3.fromRGB(40, 40, 54), BorderSizePixel = 0,
+        BackgroundColor3 = Color3.fromRGB(32, 32, 42), BorderSizePixel = 0,
     }, holder)
     new("UICorner", { CornerRadius = UDim.new(1, 0) }, trackF)
     local fill = new("Frame", {
@@ -562,17 +591,13 @@ end
 local function button(parent, text, cb)
     local b = new("TextButton", {
         Text = text, Font = Enum.Font.GothamMedium, TextSize = 13,
-        TextColor3 = Color3.fromRGB(235, 235, 245),
-        BackgroundColor3 = Color3.fromRGB(30, 30, 42), BorderSizePixel = 0,
+        TextColor3 = Color3.fromRGB(232, 232, 244),
+        BackgroundColor3 = Color3.fromRGB(22, 22, 30), BorderSizePixel = 0,
         AutoButtonColor = false, Size = UDim2.new(1, 0, 0, 30),
     }, parent)
-    new("UICorner", { CornerRadius = UDim.new(0, 7) }, b)
-    b.MouseEnter:Connect(function()
-        TweenService:Create(b, TweenInfo.new(0.12), { BackgroundColor3 = CONFIG.AccentDark }):Play()
-    end)
-    b.MouseLeave:Connect(function()
-        TweenService:Create(b, TweenInfo.new(0.12), { BackgroundColor3 = Color3.fromRGB(30, 30, 42) }):Play()
-    end)
+    new("UICorner", { CornerRadius = UDim.new(0, 8) }, b)
+    b.MouseEnter:Connect(function() tw(b, 0.14, { BackgroundColor3 = CONFIG.AccentDim }) end)
+    b.MouseLeave:Connect(function() tw(b, 0.14, { BackgroundColor3 = Color3.fromRGB(22, 22, 30) }) end)
     b.MouseButton1Click:Connect(cb)
     return b
 end
@@ -589,9 +614,10 @@ local function chips(parent, items, current, cb, perRow)
         SortOrder = Enum.SortOrder.LayoutOrder,
     }, grid)
     local made = {}
-    local function paint()
+    local function paint(animate)
         for value, b in pairs(made) do
-            b.BackgroundColor3 = (value == current) and CONFIG.AccentDark or Color3.fromRGB(32, 32, 44)
+            local target = (value == current) and CONFIG.AccentDim or Color3.fromRGB(24, 24, 32)
+            if animate then tw(b, 0.15, { BackgroundColor3 = target }) else b.BackgroundColor3 = target end
         end
     end
     for i, item in ipairs(items) do
@@ -599,21 +625,27 @@ local function chips(parent, items, current, cb, perRow)
             Text = item.name,
             Font = Enum.Font.GothamMedium,
             TextSize = 11,
-            TextColor3 = item.color or Color3.fromRGB(215, 215, 228),
-            BackgroundColor3 = Color3.fromRGB(32, 32, 44),
+            TextColor3 = item.color or Color3.fromRGB(205, 205, 220),
+            BackgroundColor3 = Color3.fromRGB(24, 24, 32),
             BorderSizePixel = 0,
             AutoButtonColor = false,
             LayoutOrder = i,
         }, grid)
         new("UICorner", { CornerRadius = UDim.new(0, 6) }, b)
         made[item.value] = b
+        b.MouseEnter:Connect(function()
+            if item.value ~= current then tw(b, 0.12, { BackgroundColor3 = Color3.fromRGB(34, 34, 46) }) end
+        end)
+        b.MouseLeave:Connect(function()
+            if item.value ~= current then tw(b, 0.12, { BackgroundColor3 = Color3.fromRGB(24, 24, 32) }) end
+        end)
         b.MouseButton1Click:Connect(function()
             current = item.value
-            paint()
+            paint(true)
             cb(item.value)
         end)
     end
-    paint()
+    paint(false)
     return grid
 end
 
@@ -621,7 +653,7 @@ end
 --  ESP
 --==============================================================
 local ESP = { objects = {} }
-local FONT = (Drawing.Fonts and Drawing.Fonts.UI) or 2
+local FONT = (Drawing and Drawing.Fonts and Drawing.Fonts.UI) or 2
 
 local function sq(filled)
     local o = Drawing.new("Square")
@@ -631,44 +663,44 @@ local function sq(filled)
     return o
 end
 
-local function blankRec()
-    local rec = {
-        box = sq(false),
-        fill = sq(true),
-        hpBg = sq(true), hp = sq(true),
-        name = Drawing.new("Text"), dist = Drawing.new("Text"), hpText = Drawing.new("Text"),
-        tracer = Drawing.new("Line"),
-        off = Drawing.new("Circle"),
-        corners = {}, cross = {}, bones = {},
-    }
-    rec.name.Center = true; rec.name.Outline = true; rec.name.Font = FONT
-    rec.name.OutlineColor = Color3.fromRGB(0, 0, 0)
-    rec.dist.Center = true; rec.dist.Outline = true; rec.dist.Font = FONT
-    rec.dist.OutlineColor = Color3.fromRGB(0, 0, 0)
-    rec.hpText.Center = true; rec.hpText.Outline = true; rec.hpText.Font = FONT
-    rec.hpText.OutlineColor = Color3.fromRGB(0, 0, 0)
+local function newRec()
+    local rec = { all = {}, bones = {}, corners = {}, cross = {} }
+    local function add(o) rec.all[#rec.all + 1] = o return o end
+
+    rec.box = add(sq(false))
+    rec.fill = add(sq(true))
+    rec.hpBg = add(sq(true))
+    rec.hp = add(sq(true))
+    rec.name = add(Drawing.new("Text"))
+    rec.dist = add(Drawing.new("Text"))
+    rec.hpText = add(Drawing.new("Text"))
+    rec.tracer = add(Drawing.new("Line"))
+    rec.off = add(Drawing.new("Circle"))
+
+    for _, t in ipairs({ rec.name, rec.dist, rec.hpText }) do
+        t.Center = true
+        t.Outline = true
+        t.Font = FONT
+        t.OutlineColor = Color3.fromRGB(0, 0, 0)
+    end
     rec.tracer.Thickness = 1
     rec.fill.Transparency = 0.85
     rec.off.Thickness = 2
     rec.off.Filled = false
-    for i = 1, 8 do rec.corners[i] = sq(false) end
-    for i = 1, 4 do rec.cross[i] = sq(false) end
+    for i = 1, 8 do rec.corners[i] = add(sq(false)) end
+    for i = 1, 4 do rec.cross[i] = add(sq(false)) end
     for i = 1, 15 do
-        local l = Drawing.new("Line")
+        local l = add(Drawing.new("Line"))
         l.Thickness = 1
-        l.Visible = false
         rec.bones[i] = l
     end
     return rec
 end
 
 local function hide(rec)
-    for k, o in pairs(rec) do
-        if k == "bones" or k == "corners" or k == "cross" then
-            for _, b in ipairs(o) do b.Visible = false end
-        else
-            pcall(function() o.Visible = false end)
-        end
+    rec.box.Filled = false
+    for _, o in ipairs(rec.all) do
+        pcall(function() o.Visible = false end)
     end
 end
 
@@ -688,45 +720,36 @@ local BONES = {
 
 local function bindPlayer(player)
     if ESP.objects[player] then return end
-    local entry = { rec = blankRec(), char = nil }
+    local entry = { rec = newRec(), char = nil }
     ESP.objects[player] = entry
 
     local function onChar(char)
         entry.char = char
-        task.spawn(function()
-            entry.humanoid = char:WaitForChild("Humanoid", 8)
-            entry.root = char:WaitForChild("HumanoidRootPart", 8)
-            entry.head = char:WaitForChild("Head", 8)
-        end)
     end
     if player.Character then onChar(player.Character) end
     track(player.CharacterAdded:Connect(onChar))
+    track(player.CharacterRemoving:Connect(function()
+        entry.char = nil
+        hide(entry.rec)
+    end))
 end
 
 local function unbindPlayer(player)
     local entry = ESP.objects[player]
     if not entry then return end
-    for _, o in pairs(entry.rec) do
-        if type(o) == "table" then
-            for _, b in ipairs(o) do pcall(function() b:Remove() end) end
-        else
-            pcall(function() o:Remove() end)
-        end
-    end
+    for _, o in ipairs(entry.rec.all) do pcall(function() o:Remove() end) end
     ESP.objects[player] = nil
 end
 
-for _, p in ipairs(Players:GetPlayers()) do
-    if p ~= lp then bindPlayer(p) end
-end
-track(Players.PlayerAdded:Connect(function(p) if p ~= lp then bindPlayer(p) end end))
+for _, p in ipairs(Players:GetPlayers()) do bindPlayer(p) end
+track(Players.PlayerAdded:Connect(bindPlayer))
 track(Players.PlayerRemoving:Connect(unbindPlayer))
 
 local rayParams = RaycastParams.new()
 rayParams.IgnoreWater = true
 
 local visState, visClock = {}, {}
-local lastInterval, fpsSmooth = 0.016, 60
+local lastInterval, fpsSmooth = 1 / 60, 60
 
 local function colorFor(player, visible, frac, dist)
     if not visible then return S.colorHidden end
@@ -752,6 +775,7 @@ end
 
 local function drawBox(rec, x, y, w, h, col)
     local t = S.thickness
+    rec.box.Filled = false
     if S.style == "full" then
         put(rec.box, x, y, w, h, col)
         return
@@ -783,168 +807,185 @@ local function drawBox(rec, x, y, w, h, col)
 end
 
 local function frameUpdate(dt)
-    if not S.espEnabled or not camera then return end
+    if not S.espEnabled or not hasDrawing then return end
+    local cam = camera or Workspace.CurrentCamera
+    if not cam then return end
 
     fpsSmooth = fpsSmooth * 0.9 + (1 / math.max(dt, 0.001)) * 0.1
-    local base = 0.016
-    if S.paranoid then
-        base = 0.1
-    elseif S.adaptive and fpsSmooth < 42 then
-        base = 0.034
-    end
-    lastInterval = base * (0.9 + math.random() * 0.2)
+    local base = 1 / 60
+    if S.adaptive and fpsSmooth < 45 then base = 1 / 30 end
+    lastInterval = base * (0.92 + math.random() * 0.16)
 
     local now = os.clock()
-    local camPos = camera.CFrame.Position
-    local vp = camera.ViewportSize
+    local camPos = cam.CFrame.Position
+    local vp = cam.ViewportSize
     local cx, cy = vp.X / 2, vp.Y / 2
+    local myChar = lp.Character
 
     for player, entry in pairs(ESP.objects) do
         local rec = entry.rec
-        local head, root, hum = entry.head, entry.root, entry.humanoid
+        local char = entry.char
 
-        if (player ~= lp or S.showLocal) and head and root and hum
-            and hum.Health > 0 and head.Parent and root.Parent then
-            local headPos = head.Position
-            local dist = (camPos - headPos).Magnitude
+        if not char or not char.Parent or (player == lp and not S.showLocal) then
+            hide(rec)
+            continue
+        end
 
-            if dist <= S.maxDist and not (S.teamCheck and player.Team == lp.Team and player ~= lp) then
-                local sTop, onTop = camera:WorldToViewportPoint(headPos + Vector3.new(0, 1.1, 0))
-                local sBot, onBot = camera:WorldToViewportPoint(root.Position - Vector3.new(0, 2.5, 0))
-                local onScreen = onTop and onBot and sTop.Z > 0 and sBot.Z > 0 and sBot.Y > sTop.Y
+        local head = char:FindFirstChild("Head")
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        local root = char:FindFirstChild("HumanoidRootPart")
 
-                if onScreen then
-                    local h = sBot.Y - sTop.Y
-                    local w = h * 0.45
-                    local x = sTop.X - w / 2
-                    local y = sTop.Y
+        if not head or not hum or not root or hum.Health <= 0 then
+            hide(rec)
+            continue
+        end
 
-                    if not visClock[player] or now - visClock[player] > 0.15 then
-                        visClock[player] = now
-                        rayParams.FilterDescendantsInstances = { entry.char, lp.Character }
-                        local hit = Workspace:Raycast(camPos, headPos - camPos, rayParams)
-                        visState[player] = (hit == nil or (entry.char and hit.Instance:IsDescendantOf(entry.char)))
-                    end
-                    local frac = math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
-                    local col = colorFor(player, visState[player] ~= false, frac, dist)
+        local headPos = head.Position
+        local dist = (camPos - headPos).Magnitude
 
-                    drawBox(rec, x, y, w, h, col)
+        if dist > S.maxDist then
+            hide(rec)
+            continue
+        end
 
-                    if S.fill and S.style == "full" then
-                        rec.fill.Color = col
-                        rec.fill.Transparency = S.fillAlpha
-                        rec.fill.Position = Vector2.new(x, y)
-                        rec.fill.Size = Vector2.new(w, h)
-                        rec.fill.Visible = true
-                    else
-                        rec.fill.Visible = false
-                    end
+        if S.teamCheck and player ~= lp and player.Team and lp.Team and player.Team == lp.Team then
+            hide(rec)
+            continue
+        end
 
-                    if S.hpMode == "bar" then
-                        local hx = (S.hpSide == "left") and (x - 6) or (x + w + 3)
-                        rec.hpBg.Position = Vector2.new(hx, y)
-                        rec.hpBg.Size = Vector2.new(3, h)
-                        rec.hpBg.Color = Color3.fromRGB(25, 25, 32)
-                        rec.hpBg.Visible = true
-                        rec.hp.Position = Vector2.new(hx, y + h * (1 - frac))
-                        rec.hp.Size = Vector2.new(3, h * frac)
-                        rec.hp.Color = Color3.fromRGB(90, 220, 120):Lerp(Color3.fromRGB(230, 70, 70), 1 - frac)
-                        rec.hp.Visible = true
-                        rec.hpText.Visible = false
-                    elseif S.hpMode == "text" then
-                        rec.hpBg.Visible = false; rec.hp.Visible = false
-                        rec.hpText.Text = tostring(math.floor(hum.Health))
-                        rec.hpText.Size = S.textSize
-                        rec.hpText.Color = Color3.fromRGB(90, 220, 120):Lerp(Color3.fromRGB(230, 70, 70), 1 - frac)
-                        rec.hpText.Position = Vector2.new(x + w / 2, y + h + 3)
-                        rec.hpText.Visible = true
-                    else
-                        rec.hpBg.Visible = false; rec.hp.Visible = false; rec.hpText.Visible = false
-                    end
+        local sTop, onTop = cam:WorldToViewportPoint(headPos + Vector3.new(0, 0.9, 0))
+        local sBot, onBot = cam:WorldToViewportPoint(root.Position - Vector3.new(0, 2.4, 0))
+        local onScreen = onTop and onBot and sTop.Z > 0 and sBot.Z > 0 and sBot.Y > sTop.Y
 
-                    local label
-                    if S.nameMode == "name" then
-                        label = player.Name
-                    elseif S.nameMode == "display" then
-                        label = player.DisplayName
-                    elseif S.nameMode == "both" then
-                        label = player.DisplayName .. " (" .. player.Name .. ")"
-                    end
-                    if label then
-                        rec.name.Text = label
-                        rec.name.Size = S.textSize
-                        rec.name.Color = col
-                        rec.name.Position = Vector2.new(x + w / 2, y - S.textSize - 3)
-                        rec.name.Visible = true
-                    else
-                        rec.name.Visible = false
-                    end
+        if not onScreen then
+            hide(rec)
+            if S.offscreen and sTop.Z > 0 then
+                local ox = math.clamp(sTop.X, 30, vp.X - 30)
+                local oy = math.clamp(sTop.Y, 30, vp.Y - 30)
+                rec.off.Position = Vector2.new(ox, oy)
+                rec.off.Radius = 7
+                rec.off.Color = S.colorStatic
+                rec.off.Visible = true
+            end
+            continue
+        end
 
-                    if S.showDist then
-                        if S.distUnit == "m" then
-                            rec.dist.Text = string.format("%d m", math.floor(dist / 3.5))
-                        else
-                            rec.dist.Text = string.format("%d st", math.floor(dist))
-                        end
-                        rec.dist.Size = S.textSize - 1
-                        rec.dist.Color = col
-                        rec.dist.Position = Vector2.new(x + w / 2, y + h + (S.hpMode == "text" and 17 or 3))
-                        rec.dist.Visible = true
-                    else
-                        rec.dist.Visible = false
-                    end
+        local h = sBot.Y - sTop.Y
+        local w = h * 0.45
+        local x = sTop.X - w / 2
+        local y = sTop.Y
 
-                    if S.tracer then
-                        rec.tracer.From = Vector2.new(cx, vp.Y)
-                        rec.tracer.To = Vector2.new(x + w / 2, y + h)
-                        rec.tracer.Color = S.colorTracer
-                        rec.tracer.Thickness = S.thickness
-                        rec.tracer.Visible = true
-                    else
-                        rec.tracer.Visible = false
-                    end
+        if not visClock[player] or now - visClock[player] > 0.15 then
+            visClock[player] = now
+            rayParams.FilterDescendantsInstances = { char, myChar }
+            local hit = Workspace:Raycast(camPos, headPos - camPos, rayParams)
+            visState[player] = (hit == nil or hit.Instance:IsDescendantOf(char))
+        end
 
-                    if S.skeleton and entry.char then
-                        local list = BONES[hum.RigType]
-                        if list then
-                            for i, pair in ipairs(list) do
-                                local a = entry.char:FindFirstChild(pair[1])
-                                local b = entry.char:FindFirstChild(pair[2])
-                                local line = rec.bones[i]
-                                if a and b and line then
-                                    local pa = camera:WorldToViewportPoint(a.Position)
-                                    local pb = camera:WorldToViewportPoint(b.Position)
-                                    line.From = Vector2.new(pa.X, pa.Y)
-                                    line.To = Vector2.new(pb.X, pb.Y)
-                                    line.Color = col
-                                    line.Thickness = S.thickness
-                                    line.Visible = true
-                                elseif line then
-                                    line.Visible = false
-                                end
-                            end
-                        end
-                    else
-                        for _, l in ipairs(rec.bones) do l.Visible = false end
-                    end
+        local frac = math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
+        local col = colorFor(player, visState[player] ~= false, frac, dist)
 
-                    rec.off.Visible = false
-                else
-                    hide(rec)
-                    if S.offscreen and sTop.Z > 0 then
-                        local ox = math.clamp(sTop.X, 30, vp.X - 30)
-                        local oy = math.clamp(sTop.Y, 30, vp.Y - 30)
-                        rec.off.Position = Vector2.new(ox, oy)
-                        rec.off.Radius = 7
-                        rec.off.Color = S.colorStatic
-                        rec.off.Visible = true
+        drawBox(rec, x, y, w, h, col)
+
+        if S.fill and S.style == "full" then
+            rec.fill.Color = col
+            rec.fill.Transparency = S.fillAlpha
+            rec.fill.Position = Vector2.new(x, y)
+            rec.fill.Size = Vector2.new(w, h)
+            rec.fill.Visible = true
+        else
+            rec.fill.Visible = false
+        end
+
+        if S.hpMode == "bar" then
+            local hx = (S.hpSide == "left") and (x - 6) or (x + w + 3)
+            rec.hpBg.Position = Vector2.new(hx, y)
+            rec.hpBg.Size = Vector2.new(3, h)
+            rec.hpBg.Color = Color3.fromRGB(22, 22, 28)
+            rec.hpBg.Visible = true
+            rec.hp.Position = Vector2.new(hx, y + h * (1 - frac))
+            rec.hp.Size = Vector2.new(3, h * frac)
+            rec.hp.Color = Color3.fromRGB(90, 220, 120):Lerp(Color3.fromRGB(230, 70, 70), 1 - frac)
+            rec.hp.Visible = true
+            rec.hpText.Visible = false
+        elseif S.hpMode == "text" then
+            rec.hpBg.Visible = false
+            rec.hp.Visible = false
+            rec.hpText.Text = tostring(math.floor(hum.Health))
+            rec.hpText.Size = S.textSize
+            rec.hpText.Color = Color3.fromRGB(90, 220, 120):Lerp(Color3.fromRGB(230, 70, 70), 1 - frac)
+            rec.hpText.Position = Vector2.new(x + w / 2, y + h + 3)
+            rec.hpText.Visible = true
+        else
+            rec.hpBg.Visible = false
+            rec.hp.Visible = false
+            rec.hpText.Visible = false
+        end
+
+        local label
+        if S.nameMode == "name" then
+            label = player.Name
+        elseif S.nameMode == "display" then
+            label = player.DisplayName
+        elseif S.nameMode == "both" then
+            label = player.DisplayName .. " (" .. player.Name .. ")"
+        end
+        if label then
+            rec.name.Text = label
+            rec.name.Size = S.textSize
+            rec.name.Color = col
+            rec.name.Position = Vector2.new(x + w / 2, y - S.textSize - 3)
+            rec.name.Visible = true
+        else
+            rec.name.Visible = false
+        end
+
+        if S.showDist then
+            if S.distUnit == "m" then
+                rec.dist.Text = string.format("%d m", math.floor(dist / 3.5))
+            else
+                rec.dist.Text = string.format("%d st", math.floor(dist))
+            end
+            rec.dist.Size = S.textSize - 1
+            rec.dist.Color = col
+            rec.dist.Position = Vector2.new(x + w / 2, y + h + (S.hpMode == "text" and 17 or 3))
+            rec.dist.Visible = true
+        else
+            rec.dist.Visible = false
+        end
+
+        if S.tracer then
+            rec.tracer.From = Vector2.new(cx, vp.Y)
+            rec.tracer.To = Vector2.new(x + w / 2, y + h)
+            rec.tracer.Color = S.colorTracer
+            rec.tracer.Thickness = S.thickness
+            rec.tracer.Visible = true
+        else
+            rec.tracer.Visible = false
+        end
+
+        if S.skeleton then
+            local list = BONES[hum.RigType]
+            if list then
+                for i, pairParts in ipairs(list) do
+                    local a = char:FindFirstChild(pairParts[1])
+                    local b = char:FindFirstChild(pairParts[2])
+                    local line = rec.bones[i]
+                    if a and b and line then
+                        local pa = cam:WorldToViewportPoint(a.Position)
+                        local pb = cam:WorldToViewportPoint(b.Position)
+                        line.From = Vector2.new(pa.X, pa.Y)
+                        line.To = Vector2.new(pb.X, pb.Y)
+                        line.Color = col
+                        line.Thickness = S.thickness
+                        line.Visible = true
+                    elseif line then
+                        line.Visible = false
                     end
                 end
-            else
-                hide(rec)
             end
         else
-            hide(rec)
+            for _, l in ipairs(rec.bones) do l.Visible = false end
         end
     end
 end
@@ -958,7 +999,7 @@ track(RunService.RenderStepped:Connect(function(dt)
 end))
 
 --==============================================================
---  БХОП
+--  БХОП  (не изменялся)
 --==============================================================
 local lastJump = 0
 local airJumps = 0
@@ -1099,159 +1140,193 @@ track(RunService.RenderStepped:Connect(function(dt)
         if realFloor(hum) == Enum.Material.Air then
             pcall(function() hum.FloorMaterial = Enum.Material.Plastic end)
         end
-        if S.spreadForce then
-            pcall(function() hum:ChangeState(Enum.HumanoidStateType.Running) end)
-        end
     end
 end))
 
 --==============================================================
---  НЕБО
+--  FPS BOOST
 --==============================================================
-local NIGHT = {
-    Bk = "rbxassetid://159454299", Dn = "rbxassetid://159454296",
-    Ft = "rbxassetid://159454293", Lf = "rbxassetid://159454290",
-    Rt = "rbxassetid://159454287", Up = "rbxassetid://159454284",
-}
+local boost = { on = false, saved = nil }
 
-local CLASSIC = {
-    Bk = "rbxasset://textures/sky/sky512_bk.tex", Dn = "rbxasset://textures/sky/sky512_dn.tex",
-    Ft = "rbxasset://textures/sky/sky512_ft.tex", Lf = "rbxasset://textures/sky/sky512_lf.tex",
-    Rt = "rbxasset://textures/sky/sky512_rt.tex", Up = "rbxasset://textures/sky/sky512_up.tex",
-}
-
-local SKY = {
-    mode = "off", stars = 0, fog = 600, clock = 1,
-    tint = Color3.fromRGB(0, 0, 0), ambient = Color3.fromRGB(0, 0, 0),
-    outdoor = Color3.fromRGB(0, 0, 0), brightness = 1,
-}
-
-local PRESETS = {
-    night    = { set = NIGHT,   clock = 1,    stars = 800,  fog = 700,  tint = Color3.fromRGB(0, 0, 0),        ambient = Color3.fromRGB(12, 12, 20),   outdoor = Color3.fromRGB(20, 20, 32),   brightness = 1.0 },
-    space    = { set = NIGHT,   clock = 0,    stars = 3000, fog = 6000, tint = Color3.fromRGB(0, 0, 0),        ambient = Color3.fromRGB(0, 0, 0),      outdoor = Color3.fromRGB(10, 10, 18),   brightness = 0.4 },
-    sunset   = { set = NIGHT,   clock = 18.2, stars = 150,  fog = 1500, tint = Color3.fromRGB(60, 30, 24),     ambient = Color3.fromRGB(42, 22, 26),   outdoor = Color3.fromRGB(84, 46, 40),   brightness = 1.2 },
-    classic  = { set = CLASSIC, clock = 14,   stars = 0,    fog = 6000, tint = Color3.fromRGB(140, 170, 200),  brightness = 2.0 },
-    overcast = { set = CLASSIC, clock = 13,   stars = 0,    fog = 800,  tint = Color3.fromRGB(118, 122, 130),  ambient = Color3.fromRGB(70, 72, 78),   outdoor = Color3.fromRGB(92, 94, 100),  brightness = 1.4 },
-    dusk     = { set = CLASSIC, clock = 17.6, stars = 60,   fog = 1800, tint = Color3.fromRGB(70, 55, 80),     ambient = Color3.fromRGB(45, 38, 55),   outdoor = Color3.fromRGB(70, 55, 80),   brightness = 1.1 },
-    void     = { set = nil,     clock = 1,    stars = 0,    fog = 600,  tint = Color3.fromRGB(0, 0, 0),        ambient = Color3.fromRGB(0, 0, 0),      outdoor = Color3.fromRGB(0, 0, 0),      brightness = 0.6 },
-    inferno  = { set = nil,     clock = 17,   stars = 0,    fog = 420,  tint = Color3.fromRGB(72, 14, 8),      ambient = Color3.fromRGB(44, 12, 8),    outdoor = Color3.fromRGB(62, 20, 12),   brightness = 1.2 },
-    ice      = { set = nil,     clock = 10,   stars = 0,    fog = 520,  tint = Color3.fromRGB(150, 180, 205),  ambient = Color3.fromRGB(32, 42, 52),   outdoor = Color3.fromRGB(46, 62, 78),   brightness = 1.4 },
-    matrix   = { set = nil,     clock = 2,    stars = 0,    fog = 460,  tint = Color3.fromRGB(6, 42, 12),      ambient = Color3.fromRGB(4, 18, 6),     outdoor = Color3.fromRGB(8, 30, 10),    brightness = 0.9 },
-    blood    = { set = nil,     clock = 0,    stars = 0,    fog = 340,  tint = Color3.fromRGB(58, 6, 6),       ambient = Color3.fromRGB(30, 4, 4),     outdoor = Color3.fromRGB(44, 8, 8),     brightness = 0.8 },
-    ash      = { set = CLASSIC, clock = 11,   stars = 0,    fog = 900,  tint = Color3.fromRGB(92, 92, 96),     ambient = Color3.fromRGB(58, 58, 62),   outdoor = Color3.fromRGB(78, 78, 82),   brightness = 1.1 },
-    neon     = { set = NIGHT,   clock = 0,    stars = 1200, fog = 700,  tint = Color3.fromRGB(48, 6, 60),      ambient = Color3.fromRGB(38, 10, 58),   outdoor = Color3.fromRGB(62, 16, 88),   brightness = 1.6 },
-    eclipse  = { set = NIGHT,   clock = 0,    stars = 2200, fog = 300,  tint = Color3.fromRGB(40, 8, 10),      ambient = Color3.fromRGB(18, 4, 6),     outdoor = Color3.fromRGB(28, 6, 8),     brightness = 0.25 },
-    fog      = { set = CLASSIC, clock = 12,   stars = 0,    fog = 130,  tint = Color3.fromRGB(170, 175, 182),  ambient = Color3.fromRGB(120, 122, 128), outdoor = Color3.fromRGB(150, 152, 158), brightness = 1.6 },
-    radiation= { set = nil,     clock = 12,   stars = 0,    fog = 500,  tint = Color3.fromRGB(56, 92, 10),     ambient = Color3.fromRGB(40, 66, 8),    outdoor = Color3.fromRGB(58, 96, 12),   brightness = 1.3 },
-    storm    = { set = CLASSIC, clock = 15,   stars = 0,    fog = 700,  tint = Color3.fromRGB(30, 36, 54),     ambient = Color3.fromRGB(24, 28, 42),   outdoor = Color3.fromRGB(36, 42, 60),   brightness = 0.7 },
-    sand     = { set = CLASSIC, clock = 16,   stars = 0,    fog = 1000, tint = Color3.fromRGB(196, 168, 112),  ambient = Color3.fromRGB(120, 102, 68), outdoor = Color3.fromRGB(160, 136, 92), brightness = 1.5 },
-    cobalt   = { set = nil,     clock = 3,    stars = 40,   fog = 560,  tint = Color3.fromRGB(8, 26, 76),      ambient = Color3.fromRGB(6, 18, 52),    outdoor = Color3.fromRGB(10, 30, 88),   brightness = 1.0 },
-}
-
-local skySaved, ourSky = nil, nil
-
-local function saveLighting()
-    if skySaved then return end
-    skySaved = {
-        sky = Lighting:FindFirstChildOfClass("Sky"),
-        ambient = Lighting.Ambient,
-        outdoor = Lighting.OutdoorAmbient,
-        brightness = Lighting.Brightness,
-        fogColor = Lighting.FogColor,
-        fogStart = Lighting.FogStart,
-        fogEnd = Lighting.FogEnd,
-        clock = Lighting.ClockTime,
-    }
-end
-
-local function restoreLighting()
-    if ourSky then pcall(function() ourSky:Destroy() end) ourSky = nil end
-    if not skySaved then return end
-    local s = skySaved
-    skySaved = nil
-    if s.sky and s.sky.Parent == nil then pcall(function() s.sky.Parent = Lighting end) end
+local function collectFx()
+    local out = {}
     pcall(function()
-        Lighting.Ambient = s.ambient
-        Lighting.OutdoorAmbient = s.outdoor
-        Lighting.Brightness = s.brightness
-        Lighting.FogColor = s.fogColor
-        Lighting.FogStart = s.fogStart
-        Lighting.FogEnd = s.fogEnd
-        Lighting.ClockTime = s.clock
-    end)
-end
-
-local function applySky(mode)
-    local p = PRESETS[mode]
-    SKY.mode = mode
-    if not p then
-        restoreLighting()
-        return
-    end
-
-    saveLighting()
-    if ourSky then pcall(function() ourSky:Destroy() end) ourSky = nil end
-
-    local gameSky = Lighting:FindFirstChildOfClass("Sky")
-    if gameSky and gameSky ~= skySaved.sky then pcall(function() gameSky.Parent = nil end) end
-    if skySaved.sky then pcall(function() skySaved.sky.Parent = nil end) end
-
-    SKY.stars = p.stars
-    SKY.fog = p.fog
-    SKY.clock = p.clock
-    SKY.tint = p.tint
-    SKY.ambient = p.ambient or skySaved.ambient
-    SKY.outdoor = p.outdoor or skySaved.outdoor
-    SKY.brightness = p.brightness or skySaved.brightness
-
-    if p.set then
-        ourSky = Instance.new("Sky")
-        ourSky.SkyboxBk = p.set.Bk
-        ourSky.SkyboxDn = p.set.Dn
-        ourSky.SkyboxFt = p.set.Ft
-        ourSky.SkyboxLf = p.set.Lf
-        ourSky.SkyboxRt = p.set.Rt
-        ourSky.SkyboxUp = p.set.Up
-        ourSky.StarCount = SKY.stars
-        ourSky.CelestialBodiesShown = true
-        ourSky.SunAngularSize = 11
-        ourSky.MoonAngularSize = 14
-        ourSky.Parent = Lighting
-    end
-
-    Lighting.ClockTime = SKY.clock
-    Lighting.Ambient = SKY.ambient
-    Lighting.OutdoorAmbient = SKY.outdoor
-    Lighting.Brightness = SKY.brightness
-    Lighting.FogColor = SKY.tint
-    Lighting.FogStart = 0
-    Lighting.FogEnd = SKY.fog
-end
-
-local function syncSky()
-    local p = PRESETS[SKY.mode]
-    if not p then return end
-    if p.set then
-        if not ourSky or not ourSky.Parent then
-            applySky(SKY.mode)
-            return
+        for _, d in ipairs(Workspace:GetDescendants()) do
+            if d:IsA("ParticleEmitter") or d:IsA("Trail") or d:IsA("Beam")
+                or d:IsA("Smoke") or d:IsA("Fire") or d:IsA("Sparkles") then
+                if d.Enabled then
+                    d.Enabled = false
+                    out[#out + 1] = d
+                end
+            end
         end
-        if ourSky.StarCount ~= SKY.stars then ourSky.StarCount = SKY.stars end
-    end
-    if Lighting.FogEnd ~= SKY.fog then Lighting.FogEnd = SKY.fog end
-    if Lighting.FogColor ~= SKY.tint then Lighting.FogColor = SKY.tint end
-    if Lighting.Ambient ~= SKY.ambient then Lighting.Ambient = SKY.ambient end
-    if math.abs(Lighting.Brightness - SKY.brightness) > 0.01 then Lighting.Brightness = SKY.brightness end
-    if math.abs(Lighting.ClockTime - SKY.clock) > 0.05 then Lighting.ClockTime = SKY.clock end
+        for _, d in ipairs(Lighting:GetChildren()) do
+            if d:IsA("PostEffect") and d.Enabled then
+                d.Enabled = false
+                out[#out + 1] = d
+            end
+        end
+    end)
+    return out
 end
 
-track(Lighting.ChildAdded:Connect(function(d)
-    if SKY.mode == "off" then return end
-    if d:IsA("Sky") and d ~= ourSky then
-        task.defer(function()
-            if SKY.mode ~= "off" and d.Parent then pcall(function() d.Parent = nil end) end
-        end)
+local function setBoost(on)
+    if boost.on == on then return end
+    if on then
+        boost.saved = {
+            quality  = (typeof(settings) == "function") and settings().Rendering.QualityLevel or nil,
+            shadows  = Lighting.GlobalShadows,
+            fogEnd   = Lighting.FogEnd,
+            fogStart = Lighting.FogStart,
+            terrain  = Workspace.Terrain and Workspace.Terrain.Decoration or nil,
+            fx       = collectFx(),
+        }
+        if boost.saved.quality then pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end) end
+        pcall(function() Lighting.GlobalShadows = false end)
+        pcall(function() Lighting.FogStart = 0; Lighting.FogEnd = 1e6 end)
+        if Workspace.Terrain then pcall(function() Workspace.Terrain.Decoration = false end) end
+        boost.on = true
+        S.fpsBoost = true
+        notify("FPS Boost включён")
+    else
+        local s = boost.saved
+        boost.saved = nil
+        boost.on = false
+        S.fpsBoost = false
+        if s then
+            if s.quality then pcall(function() settings().Rendering.QualityLevel = s.quality end) end
+            pcall(function() Lighting.GlobalShadows = s.shadows end)
+            pcall(function() Lighting.FogStart = s.fogStart; Lighting.FogEnd = s.fogEnd end)
+            if s.terrain ~= nil then pcall(function() Workspace.Terrain.Decoration = s.terrain end) end
+            for _, d in ipairs(s.fx) do pcall(function() if d.Parent then d.Enabled = true end end) end
+        end
+        notify("FPS Boost выключен")
     end
+end
+
+--==============================================================
+--  ОКНО СТАТИСТИКИ
+--==============================================================
+local startClock = os.clock()
+local statWin = new("Frame", {
+    Name = "SleepStats",
+    Size = UDim2.fromOffset(196, 168),
+    Position = UDim2.new(0.5, 300, 0.5, -180),
+    BackgroundColor3 = Color3.fromRGB(10, 10, 14),
+    BackgroundTransparency = 0.12,
+    BorderSizePixel = 0,
+    Visible = false,
+    ZIndex = 20,
+}, gui)
+new("UICorner", { CornerRadius = UDim.new(0, 10) }, statWin)
+new("UIStroke", { Color = CONFIG.Accent, Transparency = 0.55, Thickness = 1 }, statWin)
+new("UIPadding", { PaddingTop = UDim.new(0, 8), PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, statWin)
+
+local statHead = new("Frame", {
+    Size = UDim2.new(1, 0, 0, 18),
+    BackgroundTransparency = 1,
+    ZIndex = 21,
+}, statWin)
+new("TextLabel", {
+    Text = "СТАТИСТИКА",
+    Font = Enum.Font.GothamBold,
+    TextSize = 10,
+    TextColor3 = CONFIG.Accent,
+    BackgroundTransparency = 1,
+    Size = UDim2.new(1, -20, 1, 0),
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, statHead)
+local closeStat = new("TextButton", {
+    Text = "×",
+    Font = Enum.Font.GothamBold,
+    TextSize = 13,
+    TextColor3 = Color3.fromRGB(150, 150, 168),
+    BackgroundTransparency = 1,
+    Size = UDim2.fromOffset(18, 18),
+    Position = UDim2.new(1, -18, 0, 0),
+    AutoButtonColor = false,
+}, statHead)
+closeStat.MouseButton1Click:Connect(function()
+    S.statsWindow = false
+    statWin.Visible = false
+end)
+makeDraggable(statWin, statHead)
+
+local function statRow(label)
+    local r = new("Frame", { Size = UDim2.new(1, 0, 0, 17), BackgroundTransparency = 1 }, statWin)
+    new("TextLabel", {
+        Text = label, Font = Enum.Font.Gotham, TextSize = 11,
+        TextColor3 = Color3.fromRGB(130, 130, 148), BackgroundTransparency = 1,
+        Size = UDim2.new(0.6, 0, 1, 0), TextXAlignment = Enum.TextXAlignment.Left,
+    }, r)
+    return new("TextLabel", {
+        Text = "—", Font = Enum.Font.GothamMedium, TextSize = 11,
+        TextColor3 = Color3.fromRGB(235, 235, 245), BackgroundTransparency = 1,
+        Size = UDim2.new(0.4, 0, 1, 0), Position = UDim2.new(0.6, 0, 0, 0),
+        TextXAlignment = Enum.TextXAlignment.Right,
+    }, r)
+end
+
+local fpsLabel  = statRow("FPS")
+local pingLabel = statRow("PING")
+local plrLabel  = statRow("ИГРОКИ")
+local memLabel  = statRow("ПАМЯТЬ")
+local upLabel   = statRow("АПТАЙМ")
+
+new("Frame", {
+    Size = UDim2.new(1, 0, 0, 1), BackgroundColor3 = Color3.fromRGB(30, 30, 40), BorderSizePixel = 0,
+}, statWin)
+
+local boostToggle = toggle(statWin, "FPS Boost", false, function(v) setBoost(v) end)
+
+local frames, pingMs = 0, 0
+
+local function statTick(dt)
+    frames += 1
+    if frames >= 1 then end
+end
+
+local statAccum, fpsAccum, pingAccum = 0, 0, 0
+track(RunService.RenderStepped:Connect(function(dt)
+    fpsAccum += dt
+    if fpsAccum >= 0.5 then
+        local fps = math.floor(1 / math.max(fpsAccum, 0.001))
+        fpsAccum = 0
+        if S.statsWindow then
+            fpsLabel.Text = tostring(fps)
+            fpsLabel.TextColor3 = (fps >= 50) and Color3.fromRGB(120, 225, 140)
+                or (fps >= 30) and Color3.fromRGB(240, 200, 90)
+                or Color3.fromRGB(235, 90, 90)
+        end
+    end
+
+    if not S.statsWindow then return end
+    statAccum += dt
+    if statAccum < 0.5 then return end
+    statAccum = 0
+
+    local ping
+    pcall(function()
+        ping = Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
+    end)
+    if not ping then
+        pcall(function() ping = lp:GetNetworkPing() * 1000 end)
+    end
+    if ping then
+        pingLabel.Text = string.format("%d ms", math.floor(ping))
+        pingLabel.TextColor3 = (ping < 80) and Color3.fromRGB(120, 225, 140)
+            or (ping < 160) and Color3.fromRGB(240, 200, 90)
+            or Color3.fromRGB(235, 90, 90)
+    end
+
+    plrLabel.Text = string.format("%d/%d", #Players:GetPlayers(), Players.MaxPlayers)
+
+    pcall(function()
+        memLabel.Text = string.format("%d MB", math.floor(Stats:GetTotalMemoryUsageMb()))
+    end)
+
+    local up = math.floor(os.clock() - startClock)
+    upLabel.Text = string.format("%02d:%02d:%02d", math.floor(up / 3600), math.floor(up % 3600 / 60), up % 60)
 end))
 
 --==============================================================
@@ -1312,7 +1387,7 @@ local function rejoin()
     task.delay(8, function() hopping = false end)
 end
 
-local function onBan(reason, hard, force, mine)
+local function onBan(reason, hard, force)
     local now = os.clock()
     if not force and (now - loadTime) < CONFIG.DetectGrace then return end
     if now < banCooldown then return end
@@ -1328,10 +1403,10 @@ local function onBan(reason, hard, force, mine)
     banCooldown = now + 6
     S.banCount += 1
     S.lastReason = reason
-    logFile(string.format("DETECT #%d (%s): %s", S.banCount, mine and "self" or "other", reason))
+    logFile(string.format("DETECT #%d: %s", S.banCount, reason))
     notify("RAC: " .. reason .. (CONFIG.LogOnly and " (лог)" or ""))
 
-    if S.autoRejoin and not CONFIG.LogOnly and (mine or force or not S.onlySelf) then
+    if S.autoRejoin and not CONFIG.LogOnly then
         task.delay(S.rejoinDelay, rejoin)
     end
 end
@@ -1366,7 +1441,7 @@ local function scanGui(root)
                 local pat, hard = matchText(d.Text)
                 if pat then
                     banSeen[key] = true
-                    onBan(pat, hard, false, true)
+                    onBan(pat, hard, false)
                 end
             end
         end
@@ -1381,8 +1456,7 @@ task.spawn(function()
             local txt = tostring(msg.Message or "")
             local pat, hard = matchText(txt)
             if not pat then return end
-            local mine = string.find(string.lower(txt), string.lower(lp.Name), 1, true) ~= nil
-            onBan(pat, hard, false, mine)
+            onBan(pat, hard, false)
         end))
     end
 end)
@@ -1397,7 +1471,7 @@ task.spawn(function()
 end)
 
 track(lp.AncestryChanged:Connect(function(_, parent)
-    if not parent and S.watchEnabled then onBan("localplayer removed", true, true, true) end
+    if not parent and S.watchEnabled then onBan("localplayer removed", true, true) end
 end))
 
 --==============================================================
@@ -1405,12 +1479,14 @@ end))
 --==============================================================
 local visualPage = page("visual"); tabButton("Визуал", "visual")
 local movePage   = page("move");   tabButton("Движение", "move")
-local skyPage    = page("sky");    tabButton("Небо", "sky")
 local watchPage  = page("watch");  tabButton("Автобан", "watch")
 local miscPage   = page("misc");   tabButton("Прочее", "misc")
 
 section(visualPage, "основа")
-toggle(visualPage, "Включить ESP", false, function(v) S.espEnabled = v end)
+toggle(visualPage, "Включить ESP", false, function(v)
+    S.espEnabled = v
+    if v and not hasDrawing then notify("Нет Drawing API — ESP не запустится") end
+end)
 toggle(visualPage, "Игнорировать союзников", true, function(v) S.teamCheck = v end)
 toggle(visualPage, "Показывать себя", false, function(v) S.showLocal = v end)
 slider(visualPage, "Макс. дистанция (студы)", 100, 2000, 600, function(v) S.maxDist = v end)
@@ -1484,21 +1560,15 @@ section(visualPage, "цвет невидимых")
 chips(visualPage, palItems, S.colorHidden, function(v) S.colorHidden = v end)
 
 section(movePage, "бхоп")
-local bhopToggle = toggle(movePage, "Бхоп (держать пробел)", false, function(v) S.bhop = v; airJumps = 0 end)
-local bhopAggroToggle = toggle(movePage, "Агрессивный бхоп (форс + импульс)", false, function(v) S.bhopAggro = v end)
+toggle(movePage, "Бхоп (держать пробел)", false, function(v) S.bhop = v; airJumps = 0 end)
+toggle(movePage, "Агрессивный бхоп (форс + импульс)", false, function(v) S.bhopAggro = v end)
 slider(movePage, "Прыжков в воздухе", -1, 10, 0, function(v) S.jumpLimit = v; airJumps = 0 end)
 
 section(movePage, "разброс")
 toggle(movePage, "Убрать разброс в полёте", false, function(v) setAirSpread(v) end)
-local spreadForceToggle = toggle(movePage, "Форсить Running (сильнее, заметнее)", true, function(v) S.spreadForce = v end)
-toggle(movePage, "Жёсткий режим определения (по скорости)", false, function(v) S.spreadHard = v end)
-button(movePage, "Сбросить состояние разброса", function()
-    restoreSpreadState()
-    notify("Состояние разброса сброшено")
-end)
 
 section(movePage, "камера")
-local fovToggle = toggle(movePage, "Фиксация FOV", false, function(v)
+toggle(movePage, "Фиксация FOV", false, function(v)
     if v and camera then fovOriginal = camera.FieldOfView end
     S.fovEnabled = v
     applyFov()
@@ -1508,43 +1578,8 @@ slider(movePage, "FOV", 40, 120, 90, function(v)
     applyFov()
 end)
 
-section(skyPage, "пресеты")
-chips(skyPage, {
-    { name = "Выкл", value = "off" },
-    { name = "Ночь", value = "night" },
-    { name = "Космос", value = "space" },
-    { name = "Закат", value = "sunset" },
-    { name = "Сумерки", value = "dusk" },
-    { name = "Классика", value = "classic" },
-    { name = "Пасмурно", value = "overcast" },
-    { name = "Туман", value = "fog" },
-    { name = "Пепел", value = "ash" },
-    { name = "Гроза", value = "storm" },
-    { name = "Песок", value = "sand" },
-    { name = "Затмение", value = "eclipse" },
-    { name = "Неон", value = "neon" },
-    { name = "Кобальт", value = "cobalt" },
-    { name = "Пустота", value = "void" },
-    { name = "Инферно", value = "inferno" },
-    { name = "Лёд", value = "ice" },
-    { name = "Матрица", value = "matrix" },
-    { name = "Радиация", value = "radiation" },
-    { name = "Кровь", value = "blood" },
-}, SKY.mode, function(v) applySky(v) end, 4)
-
-section(skyPage, "настройка")
-slider(skyPage, "Звёзды", 0, 5000, 0, function(v)
-    SKY.stars = v
-    if ourSky then pcall(function() ourSky.StarCount = v end) end
-end)
-slider(skyPage, "Туман (дистанция)", 100, 8000, 600, function(v) SKY.fog = v; syncSky() end)
-slider(skyPage, "Яркость (x10)", 1, 30, 10, function(v) SKY.brightness = v / 10; syncSky() end)
-slider(skyPage, "Время суток", 0, 24, 12, function(v) SKY.clock = v; syncSky() end)
-button(skyPage, "Сбросить небо", function() applySky("off") end)
-
 section(watchPage, "наблюдение")
 toggle(watchPage, "Следить за RAC", true, function(v) S.watchEnabled = v end)
-toggle(watchPage, "Реагировать только на свой бан", true, function(v) S.onlySelf = v end)
 toggle(watchPage, "Автопереподключение", true, function(v) S.autoRejoin = v end)
 toggle(watchPage, "Только логировать", false, function(v) CONFIG.LogOnly = v end)
 slider(watchPage, "Задержка хопа (0.1с)", 1, 30, 15, function(v) S.rejoinDelay = v / 10 end)
@@ -1553,7 +1588,7 @@ local statusLabel = new("TextLabel", {
     Text = "Детектов: 0\nПоследнее: —",
     Font = Enum.Font.Gotham,
     TextSize = 12,
-    TextColor3 = Color3.fromRGB(160, 160, 180),
+    TextColor3 = Color3.fromRGB(150, 150, 168),
     BackgroundTransparency = 1,
     Size = UDim2.new(1, 0, 0, 34),
     TextXAlignment = Enum.TextXAlignment.Left,
@@ -1561,33 +1596,9 @@ local statusLabel = new("TextLabel", {
 }, watchPage)
 
 section(watchPage, "действия")
-button(watchPage, "Проверить детект вручную", function() onBan("manual test", true, true, true) end)
 button(watchPage, "Хопнуть сейчас", function() notify("Хоп…"); rejoin() end)
 
-section(miscPage, "производительность")
-toggle(miscPage, "Паранойя (тик 10 Гц)", false, function(v) S.paranoid = v end)
-toggle(miscPage, "Адаптивный бюджет", true, function(v) S.adaptive = v end)
-
-section(miscPage, "безопасность")
-button(miscPage, "СТЕЛС-ПРОФИЛЬ — минимум следов", function()
-    bhopToggle.set(false)
-    bhopAggroToggle.set(false)
-    spreadForceToggle.set(false)
-    fovToggle.set(false)
-    S.fovEnabled = false
-    applyFov()
-    S.skeleton = false
-    S.offscreen = false
-    notify("Стелс: только ESP и лёгкий no-spread")
-end)
-button(miscPage, "PANIC — выключить всё", function()
-    S.espEnabled = false
-    S.bhop = false
-    setAirSpread(false)
-    S.fovEnabled = false
-    applyFov()
-    notify("Всё выключено")
-end)
+section(miscPage, "служебное")
 button(miscPage, "Выгрузить скрипт", function()
     if getgenv().SleepScript then getgenv().SleepScript.Unload() end
 end)
@@ -1595,10 +1606,12 @@ end)
 --==============================================================
 --  СЛУЖЕБНОЕ
 --==============================================================
-track(RunService.Heartbeat:Connect(function()
+local statusAccum = 0
+track(RunService.Heartbeat:Connect(function(dt)
+    statusAccum += dt
+    if statusAccum < 0.25 then return end
+    statusAccum = 0
     statusLabel.Text = string.format("Детектов: %d\nПоследнее: %s", S.banCount, S.lastReason)
-    if S.fovEnabled then pcall(applyFov) end
-    if SKY.mode ~= "off" then pcall(syncSky) end
 end))
 
 track(UIS.InputBegan:Connect(function(input, processed)
@@ -1606,19 +1619,11 @@ track(UIS.InputBegan:Connect(function(input, processed)
     if input.KeyCode == CONFIG.Keybind then main.Visible = not main.Visible end
 end))
 
-main.Position = UDim2.new(0.5, -243, 0.5, -170)
-glow.Position = UDim2.new(0.5, -251, 0.5, -178)
-TweenService:Create(main, TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
-    Position = UDim2.new(0.5, -243, 0.5, -180),
-}):Play()
-TweenService:Create(glow, TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
-    Position = UDim2.new(0.5, -251, 0.5, -188),
-}):Play()
-
 pages.visual.Visible = true
 tabs.visual.TextColor3 = Color3.fromRGB(255, 255, 255)
-tabs.visual.BackgroundColor3 = CONFIG.AccentDark
-tabBars.visual.Visible = true
+tabs.visual.BackgroundColor3 = Color3.fromRGB(34, 27, 66)
+tabBars.visual.Size = UDim2.new(0, 3, 0, 16)
+tabBars.visual.Position = UDim2.new(0, 0, 0.5, -8)
 
 --==============================================================
 --  ВЫГРУЗКА
@@ -1629,17 +1634,14 @@ local function unload()
     if hookedIndex and origIndex then pcall(function() hookmetamethod(game, "__index", origIndex) end) end
     if hookedNamecall and origNamecall then pcall(function() hookmetamethod(game, "__namecall", origNamecall) end) end
     restoreSpreadState()
+    if boost.on then setBoost(false) end
     if camera then pcall(function() camera.FieldOfView = fovOriginal end) end
-    pcall(restoreLighting)
     pcall(function() gui:Destroy() end)
     getgenv().SleepScript = nil
 end
 
 getgenv().SleepScript = { Unload = unload, Settings = S }
 notify("SleepScript загружен. RightShift — меню")
-if not (hookedIndex or hookedNamecall) then
-    notify("Хуки недоступны — только запись свойства")
-end
 logFile("loaded on " .. game.GameId .. " / " .. game.JobId)
 
 end)
