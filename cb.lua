@@ -1,4 +1,11 @@
-
+--!nocheck
+--[[
+    SleepScript • Counter Blox (Rolve)  v3.1
+    ---------------------------------------------------------------
+    ESP, бхоп, no air spread, фиксация FOV,
+    окно статистики, FPS boost, автобан.
+    v3.1: no-spread снова дружит с бхопом (форс Running + тик каждый кадр).
+]]
 
 local CONFIG = {
     ScriptURL   = "",
@@ -7,7 +14,7 @@ local CONFIG = {
     Keybind     = Enum.KeyCode.RightShift,
     DetectGrace = 20,
     LogOnly     = false,
-    Version     = "3.0",
+    Version     = "3.1",
 }
 
 if getgenv().SleepScript then pcall(function() getgenv().SleepScript.Unload() end) end
@@ -1104,9 +1111,14 @@ end
 
 local function restoreSpreadState()
     local hum = curHum
-    if hum then
-        pcall(function() hum.FloorMaterial = Enum.Material.Air end)
-    end
+    if not hum then return end
+    pcall(function()
+        hum.FloorMaterial = Enum.Material.Air
+        local root = hum.RootPart
+        if root and math.abs(root.AssemblyLinearVelocity.Y) > 1 then
+            hum:ChangeState(Enum.HumanoidStateType.Freefall)
+        end
+    end)
 end
 
 local function setAirSpread(on)
@@ -1121,12 +1133,8 @@ local function setAirSpread(on)
     end
 end
 
-local spreadClock = 0
-track(RunService.RenderStepped:Connect(function(dt)
+track(RunService.RenderStepped:Connect(function()
     if not S.noAirSpread then return end
-    spreadClock += dt
-    if spreadClock < 0.05 then return end
-    spreadClock = 0
 
     local hum = curHum
     if not hum or hum.Parent == nil then
@@ -1137,9 +1145,10 @@ track(RunService.RenderStepped:Connect(function(dt)
 
     local st = realState(hum)
     if st == Enum.HumanoidStateType.Freefall or st == Enum.HumanoidStateType.Jumping then
-        if realFloor(hum) == Enum.Material.Air then
-            pcall(function() hum.FloorMaterial = Enum.Material.Plastic end)
-        end
+        -- Plastic + Running: хуман думает, что стоит на земле,
+        -- поэтому hum.Jump не съедается и бхоп продолжает работать
+        pcall(function() hum.FloorMaterial = Enum.Material.Plastic end)
+        pcall(function() hum:ChangeState(Enum.HumanoidStateType.Running) end)
     end
 end))
 
@@ -1279,14 +1288,7 @@ new("Frame", {
 
 local boostToggle = toggle(statWin, "FPS Boost", false, function(v) setBoost(v) end)
 
-local frames, pingMs = 0, 0
-
-local function statTick(dt)
-    frames += 1
-    if frames >= 1 then end
-end
-
-local statAccum, fpsAccum, pingAccum = 0, 0, 0
+local statAccum, fpsAccum = 0, 0
 track(RunService.RenderStepped:Connect(function(dt)
     fpsAccum += dt
     if fpsAccum >= 0.5 then
